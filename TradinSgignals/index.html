@@ -1,0 +1,1492 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>株式シグナルチェッカー (トレンド表示/確率分析)</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Inter Font -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
+    
+    <style>
+        /* フォント設定 */
+        body {
+            font-family: 'Inter', 'Noto Sans JP', sans-serif;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-osx-smoothing: grayscale;
+        }
+
+        /* カスタムローダー */
+        .loader {
+            border-top-color: #3498db;
+            -webkit-animation: spinner 2.5s linear infinite;
+            animation: spinner 2.5s linear infinite;
+        }
+
+        @-webkit-keyframes spinner {
+            0% { -webkit-transform: rotate(0deg); }
+            100% { -webkit-transform: rotate(360deg); }
+        }
+
+        @keyframes spinner {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body class="bg-gray-100 text-gray-900 min-h-screen">
+
+    <!-- ヘッダー -->
+    <header class="bg-white shadow-md top-0 left-0 right-0 z-10">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+            <h1 class="text-2xl font-bold text-gray-900">
+                株式シグナルチェッカー (トレンド/確率分析)
+            </h1>
+            <p class="mt-1 text-sm text-gray-500">MACD、トレンド(5/25MA)、確率分析を自動監視します (30秒ごとに自動更新)。</p>
+        </div>
+    </header>
+
+    <!-- メインコンテンツ -->
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+
+        <!-- 銘柄追加フォーム -->
+        <div class="bg-white p-6 rounded-lg shadow-lg mb-8">
+            <h2 class="text-xl font-semibold mb-4">監視銘柄の追加</h2>
+            <form id="add-stock-form" class="grid grid-cols-1 md:grid-cols-12 gap-4 items-end">
+                <div class="md:col-span-2">
+                    <label for="market-select" class="block text-sm font-medium text-gray-700">市場</label>
+                    <select id="market-select" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm h-12">
+                        <option value="US">米国株 (例: AAPL)</option>
+                        <option value="JP">日本株 (例: 7203)</option>
+                    </select>
+                </div>
+                <!-- [修正] md:col-span-8 から md:col-span-6 に短縮 -->
+                <div class="md:col-span-6">
+                    <label for="symbol-input" class="block text-sm font-medium text-gray-700">銘柄コード (シンボル)</label>
+                    <input type="text" id="symbol-input" placeholder="AAPL" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm h-12" required>
+                </div>
+                <!-- [修正] md:col-span-2 から md:col-span-4 に拡大 -->
+                <div class="md:col-span-4">
+                    <button type="submit" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-md shadow-sm transition duration-150 ease-in-out w-full whitespace-nowrap">
+                        追加して監視開始
+                    </button>
+                </div>
+            </form>
+            <p id="form-error" class="text-red-500 text-sm mt-2"></p>
+        </div>
+
+        <!-- 監視中リスト -->
+        <div>
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-2xl font-semibold">監視中リスト</h2>
+            </div>
+            <div id="watchlist" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                <!-- 監視中銘柄カードがここに挿入されます -->
+                <p class="text-gray-500 col-span-full">監視中の銘柄はありません。</p>
+            </div>
+        </div>
+
+    </main>
+
+    <!-- フッター -->
+    <footer class="bg-white mt-12 border-t border-gray-200">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 text-center text-sm text-gray-500">
+            <p>データ提供: <a href="https://finance.yahoo.com/" target="_blank" rel="noopener" class="text-indigo-600 hover:underline">Yahoo Finance</a> (via corsproxy.io)</p>
+            <p class="mt-1">免責事項: このツールは情報提供のみを目的としており、投資助言ではありません。取引はご自身の責任において行ってください。</p>
+        </div>
+    </footer>
+
+    <!-- JSロジック -->
+    <script type="module">
+        document.addEventListener('DOMContentLoaded', () => {
+            // --- 設定 ---
+            const STORAGE_KEY = 'stockSignalWatchlist_v2'; 
+            const UPDATE_INTERVAL = 30000; 
+            const REFRESH_RATE = 100; 
+            const ENTRY_STRENGTH_THRESHOLD = 3; 
+
+            // --- DOM要素 ---
+            const addStockForm = document.getElementById('add-stock-form');
+            const marketSelect = document.getElementById('market-select');
+            const symbolInput = document.getElementById('symbol-input');
+            const formError = document.getElementById('form-error');
+            const watchlistContainer = document.getElementById('watchlist');
+
+            // --- アプリケーション状態 ---
+            let watchlist = []; 
+
+            // --- APIヘルパー ---
+            async function fetchApi(symbol) {
+                // データ取得期間を2yに変更し、1年後(250日後)の確率計算に対応
+                const targetUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?range=2y&interval=1d`;
+                const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`;
+                
+                try {
+                    const response = await fetch(proxyUrl);
+                    
+                    if (!response.ok) {
+                        if (response.status === 404) {
+                            throw new Error(`銘柄コード '${symbol}' が見つかりません (404)`);
+                        }
+                        throw new Error(`HTTP error! (Proxy or Target) status: ${response.status}`);
+                    }
+                    
+                    const data = await response.json(); 
+                    
+                    if (data.chart.error) {
+                        throw new Error(`Yahoo Finance APIエラー: ${data.chart.error.description || data.chart.error.code}`);
+                    }
+                    
+                    if (!data.chart.result || !data.chart.result[0] || !data.chart.result[0].indicators.quote[0]) {
+                         throw new Error("Yahoo Financeから有効なデータが返されませんでした。銘柄コードが間違っている可能性があります。");
+                    }
+                    
+                    return data;
+
+                } catch (error) {
+                    console.error(`Fetch error for ${proxyUrl}:`, error);
+                    if (error.message.includes('Failed to fetch')) {
+                        throw new Error("ネットワークエラー。Yahoo Finance API(プロキシ経由)へのアクセスに失敗しました。");
+                    }
+                    throw error;
+                }
+            }
+
+            // --- テクニカル指標計算ヘルパー ---
+        
+            /** SMA (単一値) */
+            function calculateSMA(data, period) {
+                if (!data) return null;
+                const validData = [];
+                for (let i = 0; i < data.length; i++) {
+                    if (typeof data[i] === 'number') {
+                        validData.push(data[i]);
+                        if (validData.length >= period) break;
+                    }
+                }
+                if (validData.length < period) return null; 
+                const sum = validData.reduce((acc, val) => acc + val, 0);
+                return sum / period;
+            }
+
+            /** SMA (配列) */
+            function calculateSMAArray(data, period) {
+                if (!data || data.length < period) return new Array(data.length).fill(null);
+                let smaArray = new Array(data.length).fill(null);
+                for (let i = period - 1; i < data.length; i++) {
+                    let sum = 0;
+                    let count = 0;
+                    let hasNull = false;
+                    for (let j = 0; j < period; j++) {
+                        if (typeof data[i - j] === 'number') {
+                            sum += data[i - j];
+                            count++;
+                        } else {
+                            hasNull = true;
+                            break; 
+                        }
+                    }
+                    if (!hasNull && count === period) {
+                        smaArray[i] = sum / period;
+                    }
+                }
+                return smaArray;
+            }
+
+            /** EMA (配列) */
+            function calculateEMA(data, period) {
+                if (!data || data.length < period) return [];
+                let k = 2 / (period + 1);
+                let emaArray = new Array(data.length).fill(null);
+                let initialData = [];
+                // [修正] firstSmaIndex の初期化を明確に行う
+                let firstSmaIndex = -1; 
+                for (let i = 0; i < data.length; i++) {
+                    if (typeof data[i] === 'number') {
+                        initialData.push(data[i]);
+                        if (initialData.length === period) {
+                            firstSmaIndex = i;
+                            break;
+                        }
+                    }
+                }
+                if (firstSmaIndex === -1) return [];
+                let sum = initialData.reduce((acc, val) => acc + val, 0);
+                emaArray[firstSmaIndex] = sum / period;
+                for (let i = firstSmaIndex + 1; i < data.length; i++) {
+                    const currentVal = data[i];
+                    const prevEma = emaArray[i - 1];
+                    if (typeof currentVal === 'number' && typeof prevEma === 'number') {
+                        emaArray[i] = (currentVal * k) + (prevEma * (1 - k));
+                    } else if (typeof prevEma === 'number') {
+                        emaArray[i] = prevEma;
+                    }
+                }
+                return emaArray;
+            }
+            
+            /** MACD */
+            function calculateMACD(prices, fastPeriod = 12, slowPeriod = 26, signalPeriod = 9) {
+                if (prices.length < slowPeriod + signalPeriod) return null;
+                const emaFast = calculateEMA(prices, fastPeriod); 
+                const emaSlow = calculateEMA(prices, slowPeriod);
+                let macdLineRaw = [];
+                let validMacdPoints = [];
+                for (let i = 0; i < prices.length; i++) {
+                    if (typeof emaFast[i] === 'number' && typeof emaSlow[i] === 'number') {
+                        const macdVal = emaFast[i] - emaSlow[i];
+                        macdLineRaw[i] = macdVal;
+                        validMacdPoints.push(macdVal);
+                    } else {
+                        macdLineRaw[i] = null;
+                    }
+                }
+                if (validMacdPoints.length < signalPeriod + 2) return null; 
+                const signalLineValid = calculateEMA(validMacdPoints, signalPeriod); 
+                let signalLine = new Array(prices.length).fill(null);
+                let histLine = new Array(prices.length).fill(null); 
+                let validIndex = 0;
+                for (let i = 0; i < prices.length; i++) {
+                    if (typeof macdLineRaw[i] === 'number') {
+                         if (typeof signalLineValid[validIndex] === 'number') { 
+                             const signalVal = signalLineValid[validIndex];
+                             signalLine[i] = signalVal;
+                             histLine[i] = macdLineRaw[i] - signalVal; 
+                         }
+                         validIndex++;
+                    }
+                }
+                let todayData = null;
+                let yesterdayData = null;
+                for (let i = prices.length - 1; i >= 1; i--) {
+                    const macd_i = macdLineRaw[i];
+                    const signal_i = signalLine[i];
+                    const hist_i = histLine[i]; 
+                    if (typeof macd_i === 'number' && typeof signal_i === 'number' && typeof hist_i === 'number') {
+                        if (todayData === null) {
+                            todayData = { macd: macd_i, signal: signal_i, hist: hist_i }; 
+                        } else if (yesterdayData === null) {
+                            yesterdayData = { macd: macd_i, signal: signal_i }; 
+                            break;
+                        }
+                    }
+                }
+                if (todayData === null || yesterdayData === null) {
+                    return null;
+                }
+                return {
+                    today: todayData,
+                    yesterday: yesterdayData,
+                    histArray: histLine 
+                };
+            }
+
+            /** RSI (配列) */
+            function calculateRSIArray(prices, period = 14) {
+                if (prices.length <= period) return new Array(prices.length).fill(null);
+                let rsiArray = new Array(prices.length).fill(null);
+                let changes = [];
+                for (let i = 1; i < prices.length; i++) {
+                    if (typeof prices[i] === 'number' && typeof prices[i - 1] === 'number') {
+                        changes[i] = prices[i] - prices[i - 1];
+                    } else {
+                        changes[i] = 0; 
+                    }
+                }
+                let gains = 0;
+                let losses = 0;
+                let firstAvgIndex = -1;
+                for (let i = 1; i <= period; i++) {
+                     if (i >= changes.length) break;
+                     const change = changes[i];
+                     if (change > 0) {
+                        gains += change;
+                     } else {
+                        losses -= change;
+                     }
+                     if (i === period) {
+                         firstAvgIndex = period;
+                     }
+                }
+                if (firstAvgIndex === -1) return rsiArray;
+                let avgGain = gains / period;
+                let avgLoss = losses / period;
+                if (avgLoss === 0) {
+                     rsiArray[firstAvgIndex] = 100;
+                } else {
+                     let rs = avgGain / avgLoss;
+                     rsiArray[firstAvgIndex] = 100 - (100 / (1 + rs));
+                }
+                for (let i = firstAvgIndex + 1; i < prices.length; i++) {
+                    if (i >= changes.length) break;
+                    const change = changes[i];
+                    let gain = change > 0 ? change : 0;
+                    let loss = change < 0 ? -change : 0;
+                    avgGain = (avgGain * (period - 1) + gain) / period;
+                    avgLoss = (avgLoss * (period - 1) + loss) / period;
+                    if (avgLoss === 0) {
+                        rsiArray[i] = 100;
+                    } else {
+                        let rs = avgGain / avgLoss;
+                        rsiArray[i] = 100 - (100 / (1 + rs));
+                    }
+                }
+                return rsiArray;
+            }
+
+            /** ATR */
+            function calculateATR(dailyDataArray, period = 14) {
+                if (dailyDataArray.length <= period) return null;
+                let trValues = [];
+                let prevClose = null;
+                for (let i = 0; i < dailyDataArray.length; i++) {
+                    const data = dailyDataArray[i];
+                    if (typeof data.high !== 'number' || typeof data.low !== 'number' || typeof data.close !== 'number') {
+                        prevClose = (typeof data.close === 'number') ? data.close : prevClose;
+                        continue;
+                    }
+                    if (prevClose === null) {
+                        prevClose = data.close;
+                        continue;
+                    }
+                    const tr1 = data.high - data.low;
+                    const tr2 = Math.abs(data.high - prevClose);
+                    const tr3 = Math.abs(data.low - prevClose);
+                    trValues.push(Math.max(tr1, tr2, tr3));
+                    prevClose = data.close;
+                }
+                if (trValues.length < period) return null;
+                let relevantTrs = trValues.slice(trValues.length - period * 2);
+                if (relevantTrs.length < period) relevantTrs = trValues;
+                if (relevantTrs.length < period) return null;
+                let atrSum = 0;
+                for (let i = 0; i < period; i++) {
+                    atrSum += relevantTrs[i];
+                }
+                let atr = atrSum / period;
+                for (let i = period; i < relevantTrs.length; i++) {
+                    atr = (atr * (period - 1) + relevantTrs[i]) / period;
+                }
+                return atr;
+            }
+            
+            /** 平滑化移動平均 (SMMA) */
+            function calculateSMMA(data, period) {
+                if (data.length < period) return [];
+                let smmaArray = new Array(data.length).fill(null);
+                let sum = 0;
+                for (let i = 0; i < period; i++) {
+                    sum += data[i];
+                }
+                smmaArray[period - 1] = sum / period;
+                for (let i = period; i < data.length; i++) {
+                    smmaArray[i] = (smmaArray[i - 1] * (period - 1) + data[i]) / period;
+                }
+                return smmaArray;
+            }
+
+            /** ADX (平均方向性指数) */
+            function calculateADX(dailyDataArray, period = 14) {
+                if (dailyDataArray.length <= (period * 2)) return null; 
+                let trValues = [];
+                let plusDMValues = [];
+                let minusDMValues = [];
+                let prevClose = null;
+                let prevHigh = null;
+                let prevLow = null;
+                for (let i = 0; i < dailyDataArray.length; i++) {
+                    const data = dailyDataArray[i];
+                    if (typeof data.high !== 'number' || typeof data.low !== 'number' || typeof data.close !== 'number') {
+                        prevClose = (typeof data.close === 'number') ? data.close : prevClose;
+                        prevHigh = (typeof data.high === 'number') ? data.high : prevHigh;
+                        prevLow = (typeof data.low === 'number') ? data.low : prevLow;
+                        continue;
+                    }
+                    if (prevClose === null || prevHigh === null || prevLow === null) {
+                        prevClose = data.close;
+                        prevHigh = data.high;
+                        prevLow = data.low;
+                        continue;
+                    }
+                    const tr1 = data.high - data.low;
+                    const tr2 = Math.abs(data.high - prevClose);
+                    const tr3 = Math.abs(data.low - prevClose);
+                    const tr = Math.max(tr1, tr2, tr3);
+                    trValues.push(tr);
+                    const upMove = data.high - prevHigh;
+                    const downMove = prevLow - data.low;
+                    let plusDM = 0;
+                    let minusDM = 0;
+                    if (upMove > downMove && upMove > 0) {
+                        plusDM = upMove;
+                    }
+                    if (downMove > upMove && downMove > 0) {
+                        minusDM = downMove;
+                    }
+                    plusDMValues.push(plusDM);
+                    minusDMValues.push(minusDM);
+                    prevClose = data.close;
+                    prevHigh = data.high;
+                    prevLow = data.low;
+                }
+                const validTR = trValues.slice(1).filter(v => typeof v === 'number');
+                const validPlusDM = plusDMValues.slice(1).filter(v => typeof v === 'number');
+                const validMinusDM = minusDMValues.slice(1).filter(v => typeof v === 'number');
+                if (validTR.length < period || validPlusDM.length < period || validMinusDM.length < period) return null;
+                const smmaTR = calculateSMMA(validTR, period);
+                const smmaPlusDM = calculateSMMA(validPlusDM, period);
+                const smmaMinusDM = calculateSMMA(validMinusDM, period);
+                let dxValues = [];
+                for (let i = period - 1; i < smmaTR.length; i++) {
+                    const atr = smmaTR[i];
+                    if (atr === null || atr === 0) continue;
+                    const pDI = (smmaPlusDM[i] / atr) * 100;
+                    const mDI = (smmaMinusDM[i] / atr) * 100;
+                    const diSum = pDI + mDI;
+                    if (diSum > 0) {
+                        const dx = (Math.abs(pDI - mDI) / diSum) * 100;
+                        dxValues.push(dx);
+                    }
+                }
+                const validDx = dxValues.filter(v => typeof v === 'number');
+                if (validDx.length < period) return null; 
+                const adxLine = calculateSMMA(validDx, period);
+                const lastAdx = adxLine.pop();
+                return (typeof lastAdx === 'number') ? lastAdx : null;
+            }
+
+            /** ボリンジャーバンド (バンド幅比較用) */
+            function calculateBollingerBands(prices, period = 20, stdDevMultiplier = 2) {
+                if (prices.length < period + 5) return null; 
+                const smaArray = calculateSMAArray(prices, period);
+                let bandwidthArray = [];
+                for (let i = period - 1; i < prices.length; i++) {
+                    if (smaArray[i] === null) {
+                        bandwidthArray.push(null);
+                        continue;
+                    }
+                    const middle = smaArray[i];
+                    let sumStdDev = 0;
+                    let count = 0;
+                    for (let j = 0; j < period; j++) {
+                        if (typeof prices[i - j] === 'number') {
+                            sumStdDev += Math.pow(prices[i - j] - middle, 2);
+                            count++;
+                        }
+                    }
+                    if (count < period) {
+                         bandwidthArray.push(null);
+                         continue;
+                    }
+                    const stdDev = Math.sqrt(sumStdDev / period);
+                    const upper = middle + (stdDev * stdDevMultiplier);
+                    const lower = middle - (stdDev * stdDevMultiplier);
+                    if (middle > 0) {
+                        const bandwidth = (upper - lower) / middle;
+                        bandwidthArray.push(bandwidth);
+                    } else {
+                        bandwidthArray.push(null);
+                    }
+                }
+                const validBandwidths = bandwidthArray.filter(v => typeof v === 'number');
+                if (validBandwidths.length < 6) return null; 
+                const bandwidth_today = validBandwidths[validBandwidths.length - 1];
+                const bandwidth_5days_ago = validBandwidths[validBandwidths.length - 6]; 
+                if (typeof bandwidth_today === 'number' && typeof bandwidth_5days_ago === 'number') {
+                    return { bandwidth: bandwidth_today, bandwidth_5days_ago: bandwidth_5days_ago };
+                }
+                return null;
+            }
+
+            /** 出来高フォーマット */
+            function formatVolume(num) {
+                if (typeof num !== 'number' || num === null || num === 0) return '--';
+                if (num >= 1000000) {
+                    return (num / 1000000).toFixed(1) + 'M';
+                }
+                if (num >= 1000) {
+                    return Math.round(num / 1000).toFixed(0) + 'K'; 
+                }
+                return num.toString();
+            }
+
+            /** ピボットポイント */
+            function calculatePivotPoints(dailyDataArray) {
+                let yesterday = null;
+                let validCount = 0;
+                for (let i = dailyDataArray.length - 1; i >= 0; i--) {
+                    const data = dailyDataArray[i];
+                    if (data && typeof data.high === 'number' && typeof data.low === 'number' && typeof data.close === 'number') {
+                        validCount++;
+                        if (validCount === 2) { 
+                            yesterday = data;
+                            break;
+                        }
+                    }
+                }
+                if (yesterday === null) return null; 
+                const h = yesterday.high;
+                const l = yesterday.low;
+                const c = yesterday.close;
+                const p = (h + l + c) / 3;
+                const r1 = (2 * p) - l;
+                const s1 = (2 * p) - h;
+                return { p: p, r1: r1, s1: s1 };
+            }
+
+            /** 直近N日間の最高値 */
+            function calculateHighestHigh(prices, period) {
+                if (!prices || prices.length < period) return null;
+                let highest = 0;
+                let foundValid = false;
+                for (let i = prices.length - 1; i >= prices.length - period; i--) {
+                    if (i < 0) break;
+                    const price = prices[i];
+                    if (typeof price === 'number') {
+                        if (!foundValid || price > highest) {
+                            highest = price;
+                        }
+                        foundValid = true;
+                    }
+                }
+                return foundValid ? highest : null;
+            }
+
+            /** 利益/損失確率 (簡易バックテスト) */
+            function calculateProbabilities(prices, signalIndex, periodDays) {
+                
+                // 1. 最新の価格が見つからない場合、処理を中断
+                if (prices.length === 0 || typeof prices[prices.length - 1] !== 'number') {
+                    return { winRate: null, lossRate: null, period: periodDays, total: 0 };
+                }
+
+                let results = { win: 0, loss: 0, neutral: 0, total: 0 };
+                
+                // 2. シミュレーション可能な最大の開始インデックスを計算
+                const maxSimulatableIndex = prices.length - 1 - periodDays;
+                
+                // 3. データ不足チェック (シミュレーションに必要な期間がない)
+                if (maxSimulatableIndex < 0) {
+                    return { winRate: 0, lossRate: 0, period: periodDays, total: 0 };
+                }
+
+                // 4. 実際にシミュレーションを開始するインデックスを決定
+                const startIndex = 0; 
+
+                // 5. シミュレーションを実行
+                for (let i = startIndex; i <= maxSimulatableIndex; i++) {
+                    
+                    const startPrice = prices[i];
+                    if (typeof startPrice !== 'number') continue;
+                    
+                    let endPrice = null;
+                    let targetIndex = i + periodDays;
+
+                    // ターゲット日から5営業日後までを探す（休場日を考慮し、最も近い価格を探す）
+                    for (let j = 0; j <= 5; j++) { 
+                        let currentTargetIndex = targetIndex + j;
+                        if (currentTargetIndex < prices.length && typeof prices[currentTargetIndex] === 'number') {
+                            endPrice = prices[currentTargetIndex];
+                            break;
+                        }
+                    }
+
+                    if (endPrice !== null && typeof endPrice === 'number' && startPrice !== 0) { 
+                        results.total++;
+                        const change = (endPrice - startPrice) / startPrice;
+                        
+                        // 0.5%以上の変動を利益/損失と判定
+                        if (change > 0.005) {
+                            results.win++;
+                        } else if (change < -0.005) {
+                            results.loss++;
+                        } else {
+                            results.neutral++;
+                        }
+                    }
+                }
+                
+                if (results.total === 0) return { winRate: 0, lossRate: 0, period: periodDays, total: 0 };
+
+                const winRate = (results.win / results.total) * 100;
+                const lossRate = (results.loss / results.total) * 100;
+                
+                return { winRate: winRate, lossRate: lossRate, period: periodDays, total: results.total };
+            }
+
+
+            /**
+             * 銘柄カードごとの自動更新タイマーとプログレスバーを開始する
+             */
+            function startStockTimer(stock) {
+                if (stock.timerId) {
+                    clearInterval(stock.timerId);
+                }
+
+                let progress = 0;
+                const card = document.getElementById(`card-${stock.id}`);
+                const progressBar = card ? card.querySelector('[data-status="progress-bar"]') : null;
+                
+                if (!progressBar) return; 
+
+                const increment = 100 / (UPDATE_INTERVAL / REFRESH_RATE);
+                
+                progressBar.style.transition = 'none';
+                progressBar.style.width = '0%';
+                
+                requestAnimationFrame(() => {
+                    progressBar.style.transition = `width ${REFRESH_RATE / 1000}s linear`;
+                });
+
+                stock.timerId = setInterval(() => {
+                    progress += increment;
+
+                    if (progress >= 100) {
+                        progress = 0; 
+                        checkStockSignal(stock); 
+                        
+                        progressBar.style.transition = 'none';
+                        progressBar.style.width = '0%';
+
+                        requestAnimationFrame(() => {
+                            progressBar.style.transition = `width ${REFRESH_RATE / 1000}s linear`;
+                        });
+                        
+                    } else {
+                         progressBar.style.width = `${progress}%`;
+                    }
+                }, REFRESH_RATE);
+            }
+
+
+            // --- コアロジック: シグナル判定 ---
+            async function checkStockSignal(stock) {
+                const card = document.getElementById(`card-${stock.id}`);
+                const priceText = card ? card.querySelector('[data-status="price"]') : null;
+                const currentPrice = (priceText && priceText.textContent !== '--.--') ? priceText.textContent : '--.--';
+                
+                const stockInWatchlist = watchlist.find(s => s.id === stock.id);
+                if (!stockInWatchlist) return; 
+                
+                const dummyTrend = { text: '--', icon: '↔', color: 'text-gray-500', value: 0 };
+
+                // ローディング表示を更新
+                if (!stockInWatchlist.position) {
+                     updateCardStatus(stock.id, 'loading', '', currentPrice, dummyTrend, 0, 0, 0, null, null, null, null, null, [], null); 
+                } else {
+                     updateCardStatus(stock.id, 'loading', '', currentPrice, dummyTrend, 0, 0, 0, null, null, null, null, null, [], null);
+                }
+
+
+                try {
+                    const dailyData = await fetchApi(stock.fullSymbol);
+
+                    const result = dailyData.chart.result[0];
+                    const indicators = result.indicators.quote[0];
+                    const timestamps = result.timestamp;
+                    
+                    let chronoPrices = [];
+                    let chronoDailyObjects = [];
+                    let chronoVolumes = [];
+
+                    for (let i = 0; i < timestamps.length; i++) {
+                        const open = indicators.open[i]; 
+                        const close = indicators.close[i];
+                        const high = indicators.high[i];
+                        const low = indicators.low[i];
+                        const volume = indicators.volume[i];
+
+                        chronoPrices.push(typeof close === 'number' ? close : null);
+                        chronoVolumes.push(typeof volume === 'number' ? volume : null);
+                        
+                        chronoDailyObjects.push({
+                            open: typeof open === 'number' ? open : null, 
+                            high: typeof high === 'number' ? high : null,
+                            low: typeof low === 'number' ? low : null,
+                            close: typeof close === 'number' ? close : null
+                        });
+                    }
+
+                    if (chronoPrices.length < 50) {
+                        throw new Error(`分析に必要なデータ期間が不足しています ( ${chronoPrices.length} / 50 )。`);
+                    }
+
+                    let lastValidData = null;
+                    let lastValidTimestamp = null;
+                    // 最新の有効な終値とOHLCVを取得
+                    for (let i = chronoPrices.length - 1; i >= 0; i--) {
+                        if (typeof chronoPrices[i] === 'number' && typeof chronoVolumes[i] === 'number') {
+                            const lastObject = chronoDailyObjects[i];
+                            if (lastObject && typeof lastObject.high === 'number' && typeof lastObject.low === 'number') {
+                                lastValidData = {
+                                    close: chronoPrices[i],
+                                    volume: chronoVolumes[i],
+                                    high: lastObject.high, 
+                                    low: lastObject.low   
+                                };
+                                lastValidTimestamp = timestamps[i];
+                                break;
+                            }
+                        }
+                    }
+
+                    if (lastValidData === null) {
+                        throw new Error("有効な最新データが見つかりませんでした。");
+                    }
+                    
+                    const todayClose = lastValidData.close;
+                    const todayVolume = lastValidData.volume; 
+                    const dayHigh = lastValidData.high; 
+                    const dayLow = lastValidData.low;   
+                    
+                    // --- テクニカル指標の計算 ---
+                    const macdResult = calculateMACD(chronoPrices);
+                    const rsiArray = calculateRSIArray(chronoPrices); 
+                    const rsi_today = rsiArray.filter(v => typeof v === 'number').pop() || null; 
+                    const atr_today = calculateATR(chronoDailyObjects);
+                    const adx_today = calculateADX(chronoDailyObjects); 
+                    const bb_today = calculateBollingerBands(chronoPrices); 
+                    const pivots = calculatePivotPoints(chronoDailyObjects); 
+                    const highestHigh20 = calculateHighestHigh(chronoPrices, 20); 
+
+                    const volumes_desc = [...chronoVolumes].reverse();
+                    const vma20 = calculateSMA(volumes_desc, 20);
+
+                    const sma5Array = calculateSMAArray(chronoPrices, 5);
+                    const sma25Array = calculateSMAArray(chronoPrices, 25);
+                    
+                    const sma5 = sma5Array.filter(v => typeof v === 'number').pop();
+                    const sma25 = sma25Array.filter(v => typeof v === 'number').pop();
+                    const sma25_5days_ago = sma25Array.filter(v => typeof v === 'number').slice(-6, -5)[0] || null;
+
+                    if (macdResult === null || rsi_today === null || atr_today === null || vma20 === null || adx_today === null || sma25_5days_ago === null || bb_today === null || pivots === null || highestHigh20 === null) {
+                        throw new Error("テクニカル指標の計算に失敗しました。データ不足の可能性があります。");
+                    }
+                    
+                    // --- トレンド判定の強化 (矢印と強弱) ---
+                    const isSma5Up = sma5Array.length >= 2 && sma5Array.filter(v => typeof v === 'number').slice(-1)[0] > sma5Array.filter(v => typeof v === 'number').slice(-2, -1)[0];
+                    const isSma25Up = sma25Array.length >= 2 && sma25Array.filter(v => typeof v === 'number').slice(-1)[0] > sma25Array.filter(v => typeof v === 'number').slice(-2, -1)[0];
+                    
+                    let trendText = '横ばい';
+                    let trendIcon = '↔';
+                    let trendColor = 'text-gray-500';
+                    let trendValue = 0; // SMA5とSMA25の乖離率をベースとする
+
+                    if (typeof sma5 === 'number' && typeof sma25 === 'number' && sma25 !== 0) {
+                        trendValue = ((sma5 - sma25) / sma25) * 100; // 乖離率 (%)
+                        
+                        if (sma5 > sma25) { 
+                            if (isSma5Up && isSma25Up) {
+                                trendText = '強力な上昇トレンド';
+                                trendIcon = '▲▲';
+                                trendColor = 'text-green-600';
+                            } else if (isSma5Up) {
+                                trendText = '上昇トレンド';
+                                trendIcon = '↑';
+                                trendColor = 'text-green-500';
+                            } else {
+                                // '上昇中の一服' -> '上昇中'
+                                trendText = '上昇中';
+                                trendIcon = '▲';
+                                trendColor = 'text-green-500/70'; 
+                            }
+                        } else if (sma5 < sma25) { 
+                            if (!isSma5Up && !isSma25Up) {
+                                trendText = '強力な下降トレンド';
+                                trendIcon = '▼▼';
+                                trendColor = 'text-red-600';
+                            } else if (!isSma5Up) {
+                                trendText = '下降トレンド';
+                                trendIcon = '↓';
+                                trendColor = 'text-red-500';
+                            } else {
+                                // '下降中の一服' -> '下降中'
+                                trendText = '下降中';
+                                trendIcon = '▼';
+                                trendColor = 'text-red-500/70'; 
+                            }
+                        }
+                    }
+                    const trendSummary = { text: trendText, icon: trendIcon, color: trendColor, value: trendValue };
+
+
+                    // --- MACD, Volume, RSI判定 ---
+                    const macd_today = macdResult.today.macd;
+                    const signal_today = macdResult.today.signal;
+                    const hist_today = macdResult.today.hist;
+                    const macd_yesterday = macdResult.yesterday.macd;
+                    const signal_yesterday = macdResult.yesterday.signal;
+
+                    const isLongCross = (macd_yesterday < signal_yesterday) && (macd_today > signal_today);
+                    const isHistPositive = hist_today > 0;
+                    const isShortCross = (macd_yesterday > signal_yesterday) && (macd_today < signal_yesterday); // [修正: 以前のバージョンとの整合性のため修正]
+                    const isHistNegative = hist_today < 0;
+                    const isRsiInRange = (rsi_today !== null) && rsi_today > 35 && rsi_today < 70;
+                    const isVolumeHigh_1_5 = todayVolume > (vma20 * 1.5);
+                    const isVolumeHigh_2_0 = todayVolume > (vma20 * 2.0);
+
+                    // --- 勢いの判定 ---
+                    let momentum = { short: 'neutral', mid: 'neutral' };
+                    const rsiValid = rsiArray.filter(v => typeof v === 'number');
+                    if (rsiValid.length >= 4) {
+                        const rsi_3days_ago = rsiValid[rsiValid.length - 4];
+                        if (rsi_today > 50 && rsi_today > rsi_3days_ago) momentum.short = 'up';
+                        else if (rsi_today < 50 && rsi_today < rsi_3days_ago) momentum.short = 'down';
+                    }
+
+                    if (macdResult && macdResult.histArray) {
+                         const histValid = macdResult.histArray.filter(v => typeof v === 'number');
+                         if (histValid.length >= 4) {
+                             const hist_today_val = histValid[histValid.length - 1]; 
+                             const hist_3days_ago = histValid[histValid.length - 4];
+                             
+                             if (hist_today_val > 0 && hist_today_val > hist_3days_ago) momentum.mid = 'up';
+                             else if (hist_today_val < 0 && hist_today_val < hist_3days_ago) momentum.mid = 'down';
+                         }
+                    }
+                    
+                    // --- 特徴リストの判定 (色分けロジック追加) ---
+                    let features = [];
+                    // 上昇に関連する特徴
+                    if (isLongCross) features.push({ key: 'GC', label: 'MACDゴールデンクロス', color: 'text-gray-700', dot: 'bg-green-400' });
+                    if (macd_today > 0) features.push({ key: 'MACD-0+', label: 'MACD 0ライン上', color: 'text-gray-700', dot: 'bg-green-400' });
+                    if (typeof rsi_today === 'number' && rsi_today > 50 && rsi_today <= 70) features.push({ key: 'RSI-MID', label: `RSI上昇 (${rsi_today.toFixed(0)})`, color: 'text-gray-700', dot: 'bg-green-400' });
+                    if (isVolumeHigh_1_5 && todayClose > chronoPrices[chronoPrices.length - 2]) features.push({ key: 'Vol-Up', label: '出来高増 & 陽線', color: 'text-gray-700', dot: 'bg-green-400' });
+                    
+                    // 下降に関連する特徴
+                    if (isShortCross) features.push({ key: 'DC', label: 'MACDデッドクロス', color: 'text-gray-700', dot: 'bg-red-400' });
+                    if (macd_today < 0) features.push({ key: 'MACD-0-', label: 'MACD 0ライン下', color: 'text-gray-700', dot: 'bg-red-400' });
+                    if (typeof rsi_today === 'number' && rsi_today < 50 && rsi_today >= 30) features.push({ key: 'RSI-MID', label: `RSI下降 (${rsi_today.toFixed(0)})`, color: 'text-gray-700', dot: 'bg-red-400' });
+                    if (isVolumeHigh_1_5 && todayClose < chronoPrices[chronoPrices.length - 2]) features.push({ key: 'Vol-Down', label: '出来高増 & 陰線', color: 'text-gray-700', dot: 'bg-red-400' });
+
+                    // 中立/注意すべき特徴
+                    if (typeof rsi_today === 'number') {
+                        if (rsi_today > 70) features.push({ key: 'RSI-H', label: `RSI過熱 (${rsi_today.toFixed(0)})`, color: 'text-gray-700', dot: 'bg-yellow-400' });
+                        if (rsi_today < 30) features.push({ key: 'RSI-L', label: `RSI売られすぎ (${rsi_today.toFixed(0)})`, color: 'text-gray-700', dot: 'bg-yellow-400' });
+                    }
+                    if (bb_today) {
+                        if (bb_today.bandwidth < bb_today.bandwidth_5days_ago * 0.9) features.push({ key: 'BB-SQ', label: 'BBスクイーズ (収束)', color: 'text-gray-700', dot: 'bg-indigo-400' });
+                        if (bb_today.bandwidth > bb_today.bandwidth_5days_ago * 1.1) features.push({ key: 'BB-EXP', label: 'BBエキスパンション (拡大)', color: 'text-gray-700', dot: 'bg-indigo-400' });
+                    }
+                    if (adx_today > 25) features.push({ key: 'ADX-H', label: `ADX高 (${adx_today.toFixed(0)})`, color: 'text-gray-700', dot: 'bg-indigo-400' });
+                    else if (adx_today < 20) features.push({ key: 'ADX-L', label: `ADX低 (${adx_today.toFixed(0)})`, color: 'text-gray-700', dot: 'bg-gray-400' });
+
+
+                    // --- バックテスト/確率計算 ---
+                    const periodSelectElement = card ? card.querySelector('[data-action="period-select"]') : null;
+                    const periodDays = parseInt(periodSelectElement ? periodSelectElement.value : '30'); 
+                    const signalIndex = chronoPrices.findLastIndex(v => typeof v === 'number');
+                    const probability = calculateProbabilities(chronoPrices, signalIndex, periodDays);
+
+                    
+                    // --- ロジック分岐 ---
+
+                    // 1. ポジション保有中の場合、決済シグナルをチェック
+                    if (stockInWatchlist.position) {
+                        let { type, entryPrice, stopLoss, profitTarget } = stockInWatchlist.position; 
+                        let exitSignal = null;
+
+                        if (type === 'LONG') {
+                            const trailingStop = todayClose - (atr_today * 2);
+                            if (trailingStop > stopLoss) {
+                                stopLoss = trailingStop; 
+                                stockInWatchlist.position.stopLoss = stopLoss; 
+                            }
+                            if (todayClose < stopLoss) {
+                                exitSignal = { type: 'STOP_LOSS_LONG', message: `損切り (L): ${stock.fullSymbol} @ ${todayClose.toFixed(2)}` };
+                            } else if (todayClose > profitTarget) {
+                                exitSignal = { type: 'PROFIT_TAKE_LONG', message: `利確 (L): ${stock.fullSymbol} @ ${todayClose.toFixed(2)}` };
+                            } else if (isShortCross && isHistNegative) { 
+                                exitSignal = { type: 'EXIT_LONG', message: `反対シグナル (L): ${stock.fullSymbol} @ ${todayClose.toFixed(2)}` };
+                            }
+                        } else if (type === 'SHORT') {
+                            const trailingStop = todayClose + (atr_today * 2);
+                            if (trailingStop < stopLoss) {
+                                stopLoss = trailingStop; 
+                                stockInWatchlist.position.stopLoss = stopLoss; 
+                            }
+                            if (todayClose > stopLoss) {
+                                exitSignal = { type: 'STOP_LOSS_SHORT', message: `損切り (S): ${stock.fullSymbol} @ ${todayClose.toFixed(2)}` };
+                            } else if (todayClose < profitTarget) {
+                                exitSignal = { type: 'PROFIT_TAKE_SHORT', message: `利確 (S): ${stock.fullSymbol} @ ${todayClose.toFixed(2)}` };
+                            } else if (isLongCross && isHistPositive) { 
+                                exitSignal = { type: 'EXIT_SHORT', message: `反対シグナル (S): ${stock.fullSymbol} @ ${todayClose.toFixed(2)}` };
+                            }
+                        }
+
+                        if (exitSignal) {
+                            stockInWatchlist.position = null; 
+                            saveWatchlist(); 
+                            const exitPriceMsg = `決済価格: ${todayClose.toFixed(2)}`;
+                            switch (exitSignal.type) {
+                                case 'STOP_LOSS_LONG':
+                                case 'STOP_LOSS_SHORT':
+                                    updateCardStatus(stock.id, 'stop-loss', exitPriceMsg, todayClose.toFixed(2), trendSummary, 0, 0, 0, dayHigh, dayLow, todayVolume, momentum, pivots, features, probability);
+                                    break;
+                                case 'PROFIT_TAKE_LONG':
+                                case 'PROFIT_TAKE_SHORT':
+                                    updateCardStatus(stock.id, 'profit-take', exitPriceMsg, todayClose.toFixed(2), trendSummary, 0, 0, 0, dayHigh, dayLow, todayVolume, momentum, pivots, features, probability);
+                                    break;
+                                case 'EXIT_LONG':
+                                case 'EXIT_SHORT':
+                                    updateCardStatus(stock.id, 'exit', `反対シグナル決済 @ ${todayClose.toFixed(2)}`, todayClose.toFixed(2), trendSummary, 0, 0, 0, dayHigh, dayLow, todayVolume, momentum, pivots, features, probability);
+                                    break;
+                            }
+                            return; 
+                        } else {
+                            saveWatchlist();
+                            const sl = stockInWatchlist.position.stopLoss.toFixed(2);
+                            const pt = stockInWatchlist.position.profitTarget.toFixed(2);
+                            if (stockInWatchlist.position.type === 'LONG') {
+                                updateCardStatus(stock.id, 'holding-long', `損切: ${sl} / 利確: ${pt}`, todayClose.toFixed(2), trendSummary, 0, 0, 0, dayHigh, dayLow, todayVolume, momentum, pivots, features, probability);
+                            } else {
+                                updateCardStatus(stock.id, 'holding-short', `損切: ${sl} / 利確: ${pt}`, todayClose.toFixed(2), trendSummary, 0, 0, 0, dayHigh, dayLow, todayVolume, momentum, pivots, features, probability);
+                            }
+                            return; 
+                        } 
+                    } 
+                    
+                    // 2. ポジション非保有の場合、新規エントリーシグナルをチェック
+                    if (stockInWatchlist.position === null) {
+                        
+                        let strength = 0;
+                        let signalType = null; 
+                        const isLongSignalBase = isLongCross && isHistPositive;
+                        const isShortSignalBase = isShortCross && isHistNegative;
+                        
+                        const isR1Break = todayClose > pivots.r1;
+                        const isHighBreak = todayClose > highestHigh20;
+                        const isBreakoutSignal = !isLongSignalBase && (isR1Break || isHighBreak) && isVolumeHigh_1_5 && adx_today > 20;
+
+                        
+                        if (adx_today > 25) strength += 1; 
+                        else if (adx_today < 20) strength = Math.max(0, strength - 1); 
+                        
+                        const isExpanding = bb_today.bandwidth > bb_today.bandwidth_5days_ago;
+                        if (isExpanding) strength += 1; 
+
+                        if (isLongSignalBase) {
+                            signalType = 'MACDクロス'; 
+                            strength += 1; 
+                            if (macd_today > 0) strength += 1;
+                            if (sma25 > sma25_5days_ago) strength += 1;
+                            if (isRsiInRange) strength += 1; 
+                            if (isVolumeHigh_2_0) strength += 2;
+                            else if (isVolumeHigh_1_5) strength += 1;
+                            
+                        } else if (isBreakoutSignal) {
+                            signalType = 'R1ブレイク'; // ブレイクアウトシグナルは買い側と見なす
+                            strength = 1; 
+                            if (adx_today > 25) strength += 1; 
+                            if (sma25 > sma25_5days_ago) strength += 1; 
+                            if (rsi_today > 50) strength += 1;
+                            if (isVolumeHigh_2_0) strength += 2;
+                            else strength += 1;
+                            if (isExpanding) strength += 1;
+                            
+                        } else if (isShortSignalBase) {
+                            signalType = 'MACDクロス(売)'; 
+                            strength += 1; 
+                            if (macd_today < 0) strength += 1;
+                            if (sma25 < sma25_5days_ago) strength += 1;
+                            if (isRsiInRange) strength += 1;
+                            if (isVolumeHigh_2_0) strength += 2;
+                            else if (isVolumeHigh_1_5) strength += 1;
+                        }
+                        
+                        if (strength >= ENTRY_STRENGTH_THRESHOLD) {
+                            
+                            if (isLongSignalBase || isBreakoutSignal) {
+                                const stopLoss = (todayClose - (atr_today * 2));
+                                const profitTarget = (todayClose + (atr_today * 4)); 
+                                
+                                stockInWatchlist.position = { type: 'LONG', entryPrice: todayClose, stopLoss: stopLoss, profitTarget: profitTarget };
+                                saveWatchlist();
+
+                                updateCardStatus(stock.id, 'signal-long', signalType, todayClose.toFixed(2), trendSummary, strength, stopLoss, profitTarget, dayHigh, dayLow, todayVolume, momentum, pivots, features, probability);
+                                return;
+
+                            } else if (isShortSignalBase) {
+                                const stopLoss = (todayClose + (atr_today * 2));
+                                const profitTarget = (todayClose - (atr_today * 4)); 
+                                
+                                stockInWatchlist.position = { type: 'SHORT', entryPrice: todayClose, stopLoss: stopLoss, profitTarget: profitTarget };
+                                saveWatchlist();
+                        
+                                updateCardStatus(stock.id, 'signal-short', signalType, todayClose.toFixed(2), trendSummary, strength, stopLoss, profitTarget, dayHigh, dayLow, todayVolume, momentum, pivots, features, probability);
+                                return;
+                            }
+                        }
+                    }
+                    
+                    updateCardStatus(stock.id, 'idle', 'シグナルなし', todayClose.toFixed(2), trendSummary, 0, 0, 0, dayHigh, dayLow, todayVolume, momentum, pivots, features, probability);
+
+                } catch (error) {
+                    console.error(`Error checking ${stock.fullSymbol}:`, error);
+                    updateCardStatus(stock.id, 'error', `エラー: ${error.message}`, currentPrice, dummyTrend, 0, 0, 0, null, null, null, { short: 'neutral', mid: 'neutral' }, null, [], null); 
+                }
+            }
+
+            // --- UI更新 ---
+
+            /** ウォッチリストを再描画 */
+            function renderWatchlist() {
+                watchlistContainer.innerHTML = '';
+                if (watchlist.length === 0) {
+                    watchlistContainer.innerHTML = '<p class="text-gray-500 col-span-full no-stocks-message">監視中の銘柄はありません。</p>';
+                    return;
+                }
+
+                watchlist.forEach(stock => {
+                    renderSingleStock(stock); 
+                });
+            }
+
+            /** 単一の銘柄カードを描画してDOMに追加 */
+            function renderSingleStock(stock) {
+                const noStocksMessage = watchlistContainer.querySelector('.no-stocks-message');
+                if (noStocksMessage) noStocksMessage.remove();
+
+                const card = document.createElement('div');
+                card.id = `card-${stock.id}`;
+                card.className = 'bg-white p-5 rounded-lg shadow-md transition-all'; 
+                card.innerHTML = `
+                    <div class="flex justify-between items-start mb-3">
+                        <div>
+                            <h3 class="text-lg font-bold leading-7">${stock.symbol} <span class="text-sm font-normal text-gray-500">(${stock.market})</span></h3>
+                        </div>
+                        <div class="flex items-center space-x-3"> 
+                             <div class="loader w-5 h-5 rounded-full border-4 border-gray-200 hidden" data-status="loader"></div>
+                             <button data-action="remove" data-id="${stock.id}" class="text-gray-400 hover:text-red-500 transition-colors">
+                                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                             </button>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-4">
+                        <!-- 左カラム: 価格情報、出来高、ピボット (抵抗・支持) -->
+                        <div>
+                            <p class="text-3xl font-bold leading-7" data-status="price">--.--</p>
+                            <p class="text-xs font-normal text-gray-500 mt-2 leading-5" data-status="day-high-low">DH: -- / DL: --</p>
+                            <p class="text-xs font-normal text-gray-500 mt-1 leading-5" data-status="volume">Vol: --</p>
+                            
+                            <!-- [修正] ピボットポイントをこのカラムに移動 -->
+                            <p class="text-xs font-normal text-gray-500 mt-3 leading-5" data-status="pivot-r1">抵抗1: --</p>
+                            <p class="text-xs font-normal text-gray-500 mt-1 leading-5" data-status="pivot-s1">支持1: --</p>
+
+                            <!-- [修正] 勝率表示エリア (コンパクト化) -->
+                            <div class="mt-4 p-2 rounded-lg border border-gray-200 shadow-inner">
+                                <div data-status="probability-title-container" class="mb-1">
+                                    <p class="text-sm font-bold text-gray-700 w-full" data-status="probability-title">利益/損失 確率</p>
+                                </div>
+                                <!-- 期間選択をタイトル下に配置 -->
+                                <div class="flex items-center justify-between mb-2">
+                                    <p class="text-xs font-semibold text-gray-500" data-status="probability-detail-label">1ヶ月後 (194例)</p>
+                                    <select data-id="${stock.id}" data-action="period-select" class="text-xs font-medium text-gray-700 px-1 py-0.5 border border-gray-300 rounded-md bg-white hover:border-indigo-500">
+                                        <option value="7">1週間後</option>
+                                        <option value="30" selected>1ヶ月後</option>
+                                        <option value="250">1年後</option>
+                                    </select>
+                                </div>
+                                <!-- [修正] min-h-[50px]を追加してCLSを防ぐ -->
+                                <div class="flex justify-between items-center space-x-2 border-t border-gray-100 pt-1 min-h-[50px]"> 
+                                    <div class="flex-1 text-center">
+                                        <p class="text-xs text-gray-500">利益率</p>
+                                        <p class="text-md font-extrabold text-green-700" data-status="win-rate">-</p>
+                                    </div>
+                                    <div class="flex-1 text-center border-l border-gray-200">
+                                        <p class="text-xs text-gray-500">損失率</p>
+                                        <p class="text-md font-extrabold text-red-700" data-status="loss-rate">-</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- 右カラム: 分析情報と特徴リスト -->
+                        <div>
+                            <!-- トレンド強弱の数値 (+/-%) -->
+                            <div class="flex items-center mb-1 h-6">
+                                <!-- [修正] text-sm から text-xl, font-bold から font-extrabold に変更 -->
+                                <p class="text-xl font-extrabold" data-status="trend-value">--</p>
+                            </div>
+                            <!-- [修正] トレンドテキストとアイコンを結合し、間に適切なスペースを空ける -->
+                            <div class="flex items-center mb-1 mt-2"> 
+                                <p class="text-xs font-semibold leading-7" data-status="trend-text">トレンド</p>
+                            </div>
+                            <!-- [新規] 特徴リスト -->
+                            <div class="mt-2">
+                                <p class="text-xs font-semibold text-gray-700 mb-1">主要特徴:</p>
+                                <ul data-status="features-list" class="space-y-1">
+                                    <li class="text-xs text-gray-400 leading-4">特筆すべき特徴なし</li>
+                                </ul>
+                            </div>
+                            
+                        </div>
+                    </div>
+
+                    <div class="mt-4">
+                        <p class="text-md font-semibold mt-1 leading-7" data-status="signal">--</p>
+                    </div>
+
+                    <div class="w-full bg-gray-200 rounded-full h-1 mt-4 overflow-hidden">
+                        <div data-status="progress-bar" class="bg-blue-600 h-1 rounded-full" style="width: 0%; transition: width 0.1s linear;"></div>
+                    </div>
+                `;
+                watchlistContainer.appendChild(card);
+                
+                // 初期ローディング前にPosition情報を設定
+                if (stock.position) {
+                    const sl = stock.position.stopLoss.toFixed(2);
+                    const pt = stock.position.profitTarget.toFixed(2);
+                    const dummyTrend = { text: '--', icon: '↔', color: 'text-gray-500', value: 0 };
+                    if (stock.position.type === 'LONG') {
+                         updateCardStatus(stock.id, 'holding-long', `損切: ${sl} / 利確: ${pt}`, stock.position.entryPrice.toFixed(2), dummyTrend, 0, 0, 0, null, null, null, null, null, [], null);
+                    } else {
+                         updateCardStatus(stock.id, 'holding-short', `損切: ${sl} / 利確: ${pt}`, stock.position.entryPrice.toFixed(2), dummyTrend, 0, 0, 0, null, null, null, null, null, [], null);
+                    }
+                }
+            }
+            
+            /** 銘柄カードのステータスを更新 */
+            function updateCardStatus(stockId, statusType, signalType, price, trendSummary, strength = 0, stopLoss = 0, profitTarget = 0, dayHigh = null, dayLow = null, todayVolume = null, momentum = null, pivots = null, features = [], probability = null) { 
+                const card = document.getElementById(`card-${stockId}`);
+                if (!card) return;
+
+                const priceText = card.querySelector('[data-status="price"]');
+                const signalText = card.querySelector('[data-status="signal"]');
+                const loader = card.querySelector('[data-status="loader"]');
+                const highLowText = card.querySelector('[data-status="day-high-low"]');
+                const volumeText = card.querySelector('[data-status="volume"]');
+                const pivotR1Text = card.querySelector('[data-status="pivot-r1"]');
+                const pivotS1Text = card.querySelector('[data-status="pivot-s1"]');
+                
+                // トレンド表示要素
+                const trendText = card.querySelector('[data-status="trend-text"]'); 
+                const trendValueText = card.querySelector('[data-status="trend-value"]'); // 強弱数値
+                
+                // 特徴リスト要素
+                const featuresList = card.querySelector('[data-status="features-list"]');
+                
+                // 勝率表示要素
+                const winRateText = card.querySelector('[data-status="win-rate"]');
+                const lossRateText = card.querySelector('[data-status="loss-rate"]');
+                const probabilityTitle = card.querySelector('[data-status="probability-title"]');
+                const probabilityDetailLabel = card.querySelector('[data-status="probability-detail-label"]'); // 詳細ラベル
+
+                signalText.className = 'text-md font-semibold mt-1 leading-7';
+                loader.classList.add('hidden');
+                card.classList.remove('bg-green-50', 'bg-red-50', 'bg-yellow-50', 'bg-blue-50', 'border-green-400', 'border-red-400', 'border-yellow-400', 'bg-gray-100', 'border-gray-400', 'border-blue-400'); 
+                card.style.borderWidth = "0px";
+                
+                if (price !== '--.--') priceText.textContent = price;
+
+                // --- トレンド表示の更新 ---
+                if (trendSummary && trendText && trendValueText) {
+                    // トレンドテキストの直後にアイコンを配置 (下降中▼)
+                    trendText.textContent = `${trendSummary.text}${trendSummary.icon}`; 
+                    
+                    trendText.className = `text-xs font-semibold leading-7 ${trendSummary.color}`;
+                    
+                    // 乖離率の表示
+                    if (trendSummary.value !== 0) {
+                        const sign = trendSummary.value > 0 ? '+' : '';
+                        const colorClass = trendSummary.value > 0 ? 'text-green-600' : (trendSummary.value < 0 ? 'text-red-600' : 'text-gray-500');
+                        trendValueText.textContent = `${sign}${trendSummary.value.toFixed(2)}%`;
+                        trendValueText.className = `text-xl font-extrabold ${colorClass} mb-2`; 
+                    } else {
+                        trendValueText.textContent = `0.00%`;
+                        trendValueText.className = `text-xl font-extrabold text-gray-500 mb-2`; 
+                    }
+                }
+
+                // --- 特徴リストの更新 ---
+                if (featuresList) {
+                    featuresList.innerHTML = features.map(f => 
+                        `<li class="text-xs leading-4 flex items-center text-gray-700">
+                            <span class="inline-block w-2 h-2 rounded-full ${f.dot || 'bg-indigo-400'} mr-1 flex-shrink-0"></span>
+                            ${f.label}
+                        </li>`
+                    ).join('');
+                    
+                    if (features.length === 0) featuresList.innerHTML = `<li class="text-xs text-gray-400 leading-4">特筆すべき特徴なし</li>`;
+                }
+
+                // --- 確率の更新 ---
+                // [修正] 全ての確率関連要素が存在するかチェック
+                if (probability && probabilityTitle && probabilityDetailLabel && winRateText && lossRateText) {
+                    // タイトルを短縮
+                    probabilityTitle.textContent = `利益/損失 確率`;
+
+                    if (probability.total > 0) {
+                        const winPercentage = probability.winRate.toFixed(1);
+                        const lossPercentage = probability.lossRate.toFixed(1);
+
+                        // 利益率/損失率を正確に表示
+                        winRateText.textContent = `${winPercentage}%`;
+                        lossRateText.textContent = `${lossPercentage}%`;
+                        
+                        let periodLabel = '1週間後';
+                        if (probability.period === 30) periodLabel = '1ヶ月後';
+                        if (probability.period === 250) periodLabel = '1年後'; 
+                        
+                        // 詳細ラベルに期間と例数を表示
+                        probabilityDetailLabel.textContent = `${periodLabel} (${probability.total}例)`;
+
+                        // 利益/損失の確率が0%の場合は、ハイフン表示
+                        if (parseFloat(winPercentage) === 0) winRateText.textContent = '-';
+                        if (parseFloat(lossPercentage) === 0) lossRateText.textContent = '-';
+
+                    } else {
+                        // データ不足の場合
+                        probabilityDetailLabel.textContent = `データ不足`;
+                        winRateText.textContent = '-';
+                        lossRateText.textContent = '-';
+                    }
+
+                } else if (probabilityTitle && probabilityDetailLabel && winRateText && lossRateText) {
+                    // 確率データがないが、UI要素は存在する場合 (初期状態など)
+                    probabilityTitle.textContent = `利益/損失 確率`;
+                    probabilityDetailLabel.textContent = `データなし`;
+                    winRateText.textContent = '-';
+                    lossRateText.textContent = '-';
+                }
+
+
+                // --- 価格・出来高・ピボットの更新 ---
+                if (highLowText) {
+                    if (typeof dayHigh === 'number' && typeof dayLow === 'number') highLowText.textContent = `DH: ${dayHigh.toFixed(2)} / DL: ${dayLow.toFixed(2)}`;
+                    else highLowText.textContent = 'DH: -- / DL: --';
+                }
+                if (volumeText) {
+                    if (typeof todayVolume === 'number') volumeText.textContent = `Vol: ${formatVolume(todayVolume)}`;
+                    else volumeText.textContent = 'Vol: --';
+                }
+                if (pivotR1Text && pivotS1Text) {
+                    if (pivots && typeof pivots.r1 === 'number' && typeof pivots.s1 === 'number') {
+                        // [修正] R1/S1を漢字に
+                        pivotR1Text.textContent = `抵抗1: ${pivots.r1.toFixed(2)}`;
+                        pivotS1Text.textContent = `支持1: ${pivots.s1.toFixed(2)}`;
+                        pivotR1Text.classList.remove('text-gray-500');
+                        pivotS1Text.classList.remove('text-gray-500');
+                        pivotR1Text.classList.add('text-red-600'); 
+                        pivotS1Text.classList.add('text-green-600'); 
+                    } else {
+                         // [修正] R1/S1を漢字に
+                        pivotR1Text.textContent = '抵抗1: --';
+                        pivotS1Text.textContent = '支持1: --';
+                        pivotR1Text.classList.add('text-gray-500');
+                        pivotS1Text.classList.add('text-gray-500');
+                        pivotR1Text.classList.remove('text-red-600');
+                        pivotS1Text.classList.remove('text-green-600');
+                    }
+                }
+
+
+                let signalMessage = signalType; 
+
+                switch (statusType) {
+                    case 'loading':
+                        signalMessage = '更新中...';
+                        signalText.className = 'text-md font-semibold mt-1 leading-7 text-blue-600';
+                        loader.classList.remove('hidden');
+                        break;
+                    case 'idle':
+                        signalMessage = 'シグナルなし';
+                        signalText.className = 'text-md font-semibold mt-1 leading-7 text-gray-600';
+                        break;
+                    case 'signal-long': 
+                        signalMessage = `買い (${signalType}) (SL: ${stopLoss.toFixed(2)} / PT: ${profitTarget.toFixed(2)})`;
+                        signalText.className = 'text-md font-semibold mt-1 leading-7 text-green-700';
+                        card.classList.add('bg-green-50', 'border-green-400');
+                        card.style.borderWidth = "2px";
+                        break;
+                    case 'signal-short': 
+                        signalMessage = `売り (${signalType}) (SL: ${stopLoss.toFixed(2)} / PT: ${profitTarget.toFixed(2)})`;
+                        signalText.className = 'text-md font-semibold mt-1 leading-7 text-red-700';
+                        card.classList.add('bg-red-50', 'border-red-400');
+                        card.style.borderWidth = "2px";
+                        break;
+                    case 'holding-long': 
+                        signalMessage = signalType; 
+                        signalText.className = 'text-md font-semibold mt-1 leading-7 text-green-700';
+                        card.classList.add('bg-green-50'); 
+                        break;
+                    case 'holding-short': 
+                        signalMessage = signalType; 
+                        signalText.className = 'text-md font-semibold mt-1 leading-7 text-red-700';
+                        card.classList.add('bg-red-50');
+                        break;
+                    case 'error':
+                        signalMessage = signalType; 
+                        signalText.className = 'text-md font-semibold mt-1 leading-7 text-yellow-800';
+                        card.classList.add('bg-yellow-50', 'border-yellow-400');
+                        card.style.borderWidth = "2px";
+                        break;
+                    case 'profit-take':
+                        signalMessage = signalType; 
+                        signalText.className = 'text-md font-semibold mt-1 leading-7 text-blue-700';
+                        card.classList.add('bg-blue-50', 'border-blue-400');
+                        card.style.borderWidth = "2px";
+                        break;
+                    case 'stop-loss':
+                        signalMessage = signalType; 
+                        signalText.className = 'text-md font-semibold mt-1 leading-7 text-yellow-800'; 
+                        card.classList.add('bg-yellow-50', 'border-yellow-400');
+                        card.style.borderWidth = "2px";
+                        break;
+                    case 'exit':
+                        signalMessage = signalType; 
+                        signalText.className = 'text-md font-semibold mt-1 leading-7 text-gray-700';
+                        card.classList.add('bg-gray-100', 'border-gray-400');
+                        card.style.borderWidth = "2px";
+                        break;
+                    default:
+                        signalMessage = '--';
+                }
+                signalText.textContent = signalMessage; 
+            }
+            
+            // --- 状態管理 (LocalStorage) ---
+            function loadWatchlist() {
+                const stored = localStorage.getItem(STORAGE_KEY);
+                if (stored) {
+                    const loaded = JSON.parse(stored);
+                    watchlist = loaded.map(stock => ({
+                        ...stock,
+                        position: stock.position || null,
+                        timerId: null 
+                    }));
+                }
+            }
+
+            function saveWatchlist() {
+                const savableWatchlist = watchlist.map(stock => ({
+                    id: stock.id,
+                    symbol: stock.symbol,
+                    market: stock.market,
+                    fullSymbol: stock.fullSymbol,
+                    position: stock.position
+                }));
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(savableWatchlist));
+            }
+
+            function checkAllSignalsAndStartTimers(isInitialLoad = false) {
+                if (watchlist.length === 0) return;
+
+                let delay = 0;
+                const delayIncrement = isInitialLoad ? 2000 : 0; 
+
+                watchlist.forEach(stock => {
+                    if (stock.timerId) {
+                        clearInterval(stock.timerId);
+                        stock.timerId = null;
+                    }
+
+                    const exec = () => {
+                        checkStockSignal(stock); 
+                        startStockTimer(stock); 
+                    };
+
+                    if (delayIncrement > 0) {
+                         setTimeout(exec, delay);
+                         delay += delayIncrement;
+                    } else {
+                        exec();
+                    }
+                });
+            }
+
+
+            // --- イベントリスナー ---
+            addStockForm.addEventListener('submit', (e) => {
+                e.preventDefault();
+                formError.textContent = '';
+                
+                const market = marketSelect.value;
+                let symbol = symbolInput.value.trim().toUpperCase();
+
+                if (!symbol) {
+                    formError.textContent = '銘柄コードを入力してください。';
+                    return;
+                }
+                
+                let fullSymbol = symbol;
+                if (market === 'JP' && !symbol.endsWith('.T')) {
+                    fullSymbol = `${symbol}.T`;
+                }
+                
+                const id = `${market}-${fullSymbol}`;
+
+                if (watchlist.some(stock => stock.id === id)) {
+                    formError.textContent = 'この銘柄は既に追加されています。';
+                    return;
+                }
+
+                const newStock = { id, symbol, market, fullSymbol, position: null, timerId: null }; 
+                watchlist.push(newStock);
+                
+                saveWatchlist();
+                
+                renderSingleStock(newStock); 
+                
+                checkStockSignal(newStock);
+                startStockTimer(newStock);
+
+                symbolInput.value = '';
+            });
+
+            watchlistContainer.addEventListener('click', (e) => {
+                const removeButton = e.target.closest('[data-action="remove"]');
+                if (removeButton) {
+                    const stockId = removeButton.dataset.id;
+                    
+                    const stockToRemove = watchlist.find(stock => stock.id === stockId);
+                    if (stockToRemove && stockToRemove.timerId) {
+                        clearInterval(stockToRemove.timerId); 
+                    }
+                    
+                    watchlist = watchlist.filter(stock => stock.id !== stockId);
+                    saveWatchlist();
+                    
+                    const card = document.getElementById(`card-${stockId}`);
+                    if (card) {
+                        card.remove();
+                    }
+                    
+                    if (watchlist.length === 0) {
+                        watchlistContainer.innerHTML = '<p class="text-gray-500 col-span-full no-stocks-message">監視中の銘柄はありません。</p>';
+                    }
+                }
+            });
+            
+            // 期間選択の変更イベントを親要素に委譲し、再計算をトリガー
+            watchlistContainer.addEventListener('change', (e) => {
+                const periodSelect = e.target.closest('[data-action="period-select"]');
+                if (periodSelect) {
+                    const stockId = periodSelect.dataset.id;
+                    const stockToUpdate = watchlist.find(stock => stock.id === stockId);
+                    
+                    if (stockToUpdate) {
+                        // 期間変更時、即座にシグナルチェックと確率計算を再実行
+                        checkStockSignal(stockToUpdate); 
+                    }
+                }
+            });
+
+            
+            // --- 初期化 ---
+            function init() {
+                loadWatchlist(); 
+                renderWatchlist(); 
+                checkAllSignalsAndStartTimers(true); 
+            }
+
+            init();
+        });
+    </script>
+
+</body>
+</html>
