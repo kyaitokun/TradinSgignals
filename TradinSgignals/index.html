@@ -53,7 +53,7 @@
             <h1 class="text-2xl font-bold text-gray-900">
                 株式シグナルチェッカー (トレンド/確率分析/ニュース)
             </h1>
-            <p class="mt-1 text-sm text-gray-500">MACD、トレンド(5/25MA)、確率分析を自動監視します (5秒ごとに自動更新)。ニュース検索は手動です。</p>
+            <p class="mt-1 text-sm text-gray-500">MACD、トレンド(5/25MA)、確率分析を自動監視します (3秒ごとに自動更新)。ニュース検索は手動です。</p>
         </div>
     </header>
 
@@ -136,7 +136,7 @@
         document.addEventListener('DOMContentLoaded', () => {
             // --- 設定 ---
             const STORAGE_KEY = 'stockSignalWatchlist_v2'; 
-            const UPDATE_INTERVAL = 5000; 
+            const UPDATE_INTERVAL = 3000; 
             const REFRESH_RATE = 100; 
             const ENTRY_STRENGTH_THRESHOLD = 3; 
 
