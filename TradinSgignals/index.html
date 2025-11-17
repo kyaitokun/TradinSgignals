@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>株式シグナルチェッカー (トレンド表示/確率分析)</title>
+    <title>株式シグナルチェッカー (トレンド表示/確率分析/ニュース)</title>
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Inter Font -->
@@ -35,6 +35,10 @@
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
         }
+        /* モーダルの背景 */
+        .modal-overlay {
+            background-color: rgba(0, 0, 0, 0.7);
+        }
     </style>
 </head>
 <body class="bg-gray-100 text-gray-900 min-h-screen">
@@ -43,9 +47,9 @@
     <header class="bg-white shadow-md top-0 left-0 right-0 z-10">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
             <h1 class="text-2xl font-bold text-gray-900">
-                株式シグナルチェッカー (トレンド/確率分析)
+                株式シグナルチェッカー (トレンド/確率分析/ニュース)
             </h1>
-            <p class="mt-1 text-sm text-gray-500">MACD、トレンド(5/25MA)、確率分析を自動監視します (5秒ごとに自動更新)。</p>
+            <p class="mt-1 text-sm text-gray-500">MACD、トレンド(5/25MA)、確率分析を自動監視します (3秒ごとに自動更新)。ニュース検索は手動です。</p>
         </div>
     </header>
 
@@ -63,12 +67,10 @@
                         <option value="JP">日本株 (例: 7203)</option>
                     </select>
                 </div>
-                <!-- [修正] md:col-span-8 から md:col-span-6 に短縮 -->
                 <div class="md:col-span-6">
                     <label for="symbol-input" class="block text-sm font-medium text-gray-700">銘柄コード (シンボル)</label>
                     <input type="text" id="symbol-input" placeholder="AAPL" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm h-12" required>
                 </div>
-                <!-- [修正] md:col-span-2 から md:col-span-4 に拡大 -->
                 <div class="md:col-span-4">
                     <button type="submit" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-md shadow-sm transition duration-150 ease-in-out w-full whitespace-nowrap">
                         追加して監視開始
@@ -98,13 +100,39 @@
             <p class="mt-1">免責事項: このツールは情報提供のみを目的としており、投資助言ではありません。取引はご自身の責任において行ってください。</p>
         </div>
     </footer>
+    
+    <!-- ニュース表示用モーダル (リストの邪魔にならない独立した要素) -->
+    <div id="news-modal" class="fixed inset-0 z-50 hidden items-center justify-center modal-overlay">
+        <div class="bg-white rounded-lg shadow-xl w-full max-w-2xl mx-4 my-8 p-6 transform transition-all overflow-y-auto max-h-[90vh]">
+            <div class="flex justify-between items-start border-b pb-3 mb-4">
+                <h3 class="text-xl font-bold text-gray-900" id="modal-title">ニュース検索結果</h3>
+                <button id="close-modal" class="text-gray-400 hover:text-gray-700 transition">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                </button>
+            </div>
+            
+            <!-- ニュースコンテンツエリア -->
+            <div id="modal-news-content" class="min-h-[100px]">
+                <!-- 検索中または結果がここに挿入されます -->
+            </div>
+            
+            <!-- 引用元エリア -->
+            <div id="modal-news-sources" class="mt-6 pt-4 border-t border-gray-200">
+                <p class="text-sm font-semibold text-gray-700 mb-2">引用元情報:</p>
+                <div id="modal-source-links" class="text-xs text-gray-500 space-y-2">
+                    <!-- ソースリンクがここに挿入されます -->
+                </div>
+            </div>
+        </div>
+    </div>
+
 
     <!-- JSロジック -->
     <script type="module">
         document.addEventListener('DOMContentLoaded', () => {
             // --- 設定 ---
             const STORAGE_KEY = 'stockSignalWatchlist_v2'; 
-            const UPDATE_INTERVAL = 5000; 
+            const UPDATE_INTERVAL = 3000; 
             const REFRESH_RATE = 100; 
             const ENTRY_STRENGTH_THRESHOLD = 3; 
 
@@ -114,13 +142,17 @@
             const symbolInput = document.getElementById('symbol-input');
             const formError = document.getElementById('form-error');
             const watchlistContainer = document.getElementById('watchlist');
+            const newsModal = document.getElementById('news-modal');
+            const closeModalButton = document.getElementById('close-modal');
+            const modalTitle = document.getElementById('modal-title');
+            const modalNewsContent = document.getElementById('modal-news-content');
+            const modalSourceLinks = document.getElementById('modal-source-links');
 
             // --- アプリケーション状態 ---
             let watchlist = []; 
 
-            // --- APIヘルパー ---
+            // --- APIヘルパー (Yahoo Finance) ---
             async function fetchApi(symbol) {
-                // データ取得期間を2yに変更し、1年後(250日後)の確率計算に対応
                 const targetUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?range=2y&interval=1d`;
                 const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`;
                 
@@ -155,8 +187,7 @@
                 }
             }
 
-            // --- テクニカル指標計算ヘルパー ---
-        
+            // --- テクニカル指標計算ヘルパー (省略 - 変更なし) ---
             /** SMA (単一値) */
             function calculateSMA(data, period) {
                 if (!data) return null;
@@ -202,7 +233,6 @@
                 let k = 2 / (period + 1);
                 let emaArray = new Array(data.length).fill(null);
                 let initialData = [];
-                // [修正] firstSmaIndex の初期化を明確に行う
                 let firstSmaIndex = -1; 
                 for (let i = 0; i < data.length; i++) {
                     if (typeof data[i] === 'number') {
@@ -557,26 +587,18 @@
 
             /** 利益/損失確率 (簡易バックテスト) */
             function calculateProbabilities(prices, signalIndex, periodDays) {
-                
-                // 1. 最新の価格が見つからない場合、処理を中断
                 if (prices.length === 0 || typeof prices[prices.length - 1] !== 'number') {
                     return { winRate: null, lossRate: null, period: periodDays, total: 0 };
                 }
 
                 let results = { win: 0, loss: 0, neutral: 0, total: 0 };
-                
-                // 2. シミュレーション可能な最大の開始インデックスを計算
                 const maxSimulatableIndex = prices.length - 1 - periodDays;
                 
-                // 3. データ不足チェック (シミュレーションに必要な期間がない)
                 if (maxSimulatableIndex < 0) {
                     return { winRate: 0, lossRate: 0, period: periodDays, total: 0 };
                 }
-
-                // 4. 実際にシミュレーションを開始するインデックスを決定
                 const startIndex = 0; 
 
-                // 5. シミュレーションを実行
                 for (let i = startIndex; i <= maxSimulatableIndex; i++) {
                     
                     const startPrice = prices[i];
@@ -585,7 +607,6 @@
                     let endPrice = null;
                     let targetIndex = i + periodDays;
 
-                    // ターゲット日から5営業日後までを探す（休場日を考慮し、最も近い価格を探す）
                     for (let j = 0; j <= 5; j++) { 
                         let currentTargetIndex = targetIndex + j;
                         if (currentTargetIndex < prices.length && typeof prices[currentTargetIndex] === 'number') {
@@ -598,7 +619,6 @@
                         results.total++;
                         const change = (endPrice - startPrice) / startPrice;
                         
-                        // 0.5%以上の変動を利益/損失と判定
                         if (change > 0.005) {
                             results.win++;
                         } else if (change < -0.005) {
@@ -615,6 +635,81 @@
                 const lossRate = (results.loss / results.total) * 100;
                 
                 return { winRate: winRate, lossRate: lossRate, period: periodDays, total: results.total };
+            }
+            
+            // --- APIヘルパー (Gemini) ---
+            const apiKey = ""; 
+            const GEMINI_MODEL = 'gemini-2.5-flash-preview-09-2025';
+            const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
+
+            async function fetchGeminiNews(symbol) {
+                const systemPrompt = `あなたは世界経済と金融市場に精通した日本語のAIアシスタントです。Google Search Toolを使用して、過去48時間以内に発生した ${symbol} 株に関連する最新のニュースやイベントを検索し、その株価への影響について簡潔に、しかし専門的に分析した単一の段落の要約を作成してください。要約は日本語で記述し、専門用語は分かりやすく説明してください。`;
+                const userQuery = `${symbol} の最近のニュースと株価への影響について、最新の情報を基に分析を要約してください。`;
+                
+                const payload = {
+                    contents: [{ parts: [{ text: userQuery }] }],
+                    tools: [{ "google_search": {} }],
+                    systemInstruction: {
+                        parts: [{ text: systemPrompt }]
+                    },
+                };
+
+                let retries = 0;
+                let maxRetries = 3;
+                let delay = 1000; 
+
+                while (retries < maxRetries) {
+                    try {
+                        const response = await fetch(API_URL, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload)
+                        });
+
+                        if (!response.ok) {
+                            if (response.status === 429 && retries < maxRetries - 1) {
+                                retries++;
+                                delay *= 2; 
+                                await new Promise(resolve => setTimeout(resolve, delay));
+                                continue;
+                            }
+                            throw new Error(`APIリクエストエラー: ${response.status} ${response.statusText}`);
+                        }
+
+                        const result = await response.json();
+                        const candidate = result.candidates?.[0];
+
+                        if (!candidate || !candidate.content?.parts?.[0]?.text) {
+                            throw new Error("Geminiから有効な応答がありませんでした。");
+                        }
+                        
+                        const text = candidate.content.parts[0].text;
+                        let sources = [];
+                        const groundingMetadata = candidate.groundingMetadata;
+                        
+                        if (groundingMetadata && groundingMetadata.groundingAttributions) {
+                            sources = groundingMetadata.groundingAttributions
+                                .map(attribution => ({
+                                    uri: attribution.web?.uri,
+                                    title: attribution.web?.title,
+                                }))
+                                .filter(source => source.uri && source.title); 
+                        }
+
+                        return { text, sources };
+
+                    } catch (error) {
+                        console.error(`Gemini API Fetch Error (Attempt ${retries + 1}):`, error);
+                        if (retries < maxRetries - 1) {
+                            retries++;
+                            delay *= 2; 
+                            await new Promise(resolve => setTimeout(resolve, delay));
+                            continue;
+                        }
+                        throw new Error(`ニュース検索に失敗しました: ${error.message}`);
+                    }
+                }
+                throw new Error("ニュース検索に失敗しました: リトライ回数を超過しました。");
             }
 
 
@@ -716,7 +811,6 @@
 
                     let lastValidData = null;
                     let lastValidTimestamp = null;
-                    // 最新の有効な終値とOHLCVを取得
                     for (let i = chronoPrices.length - 1; i >= 0; i--) {
                         if (typeof chronoPrices[i] === 'number' && typeof chronoVolumes[i] === 'number') {
                             const lastObject = chronoDailyObjects[i];
@@ -773,7 +867,7 @@
                     let trendText = '横ばい';
                     let trendIcon = '↔';
                     let trendColor = 'text-gray-500';
-                    let trendValue = 0; // SMA5とSMA25の乖離率をベースとする
+                    let trendValue = 0; 
 
                     if (typeof sma5 === 'number' && typeof sma25 === 'number' && sma25 !== 0) {
                         trendValue = ((sma5 - sma25) / sma25) * 100; // 乖離率 (%)
@@ -788,7 +882,6 @@
                                 trendIcon = '↑';
                                 trendColor = 'text-green-500';
                             } else {
-                                // '上昇中の一服' -> '上昇中'
                                 trendText = '上昇中';
                                 trendIcon = '▲';
                                 trendColor = 'text-green-500/70'; 
@@ -803,7 +896,6 @@
                                 trendIcon = '↓';
                                 trendColor = 'text-red-500';
                             } else {
-                                // '下降中の一服' -> '下降中'
                                 trendText = '下降中';
                                 trendIcon = '▼';
                                 trendColor = 'text-red-500/70'; 
@@ -811,7 +903,6 @@
                         }
                     }
                     const trendSummary = { text: trendText, icon: trendIcon, color: trendColor, value: trendValue };
-
 
                     // --- MACD, Volume, RSI判定 ---
                     const macd_today = macdResult.today.macd;
@@ -822,7 +913,7 @@
 
                     const isLongCross = (macd_yesterday < signal_yesterday) && (macd_today > signal_today);
                     const isHistPositive = hist_today > 0;
-                    const isShortCross = (macd_yesterday > signal_yesterday) && (macd_today < signal_yesterday); // [修正: 以前のバージョンとの整合性のため修正]
+                    const isShortCross = (macd_yesterday > signal_yesterday) && (macd_today < signal_yesterday); 
                     const isHistNegative = hist_today < 0;
                     const isRsiInRange = (rsi_today !== null) && rsi_today > 35 && rsi_today < 70;
                     const isVolumeHigh_1_5 = todayVolume > (vma20 * 1.5);
@@ -850,19 +941,16 @@
                     
                     // --- 特徴リストの判定 (色分けロジック追加) ---
                     let features = [];
-                    // 上昇に関連する特徴
                     if (isLongCross) features.push({ key: 'GC', label: 'MACDゴールデンクロス', color: 'text-gray-700', dot: 'bg-green-400' });
                     if (macd_today > 0) features.push({ key: 'MACD-0+', label: 'MACD 0ライン上', color: 'text-gray-700', dot: 'bg-green-400' });
                     if (typeof rsi_today === 'number' && rsi_today > 50 && rsi_today <= 70) features.push({ key: 'RSI-MID', label: `RSI上昇 (${rsi_today.toFixed(0)})`, color: 'text-gray-700', dot: 'bg-green-400' });
                     if (isVolumeHigh_1_5 && todayClose > chronoPrices[chronoPrices.length - 2]) features.push({ key: 'Vol-Up', label: '出来高増 & 陽線', color: 'text-gray-700', dot: 'bg-green-400' });
                     
-                    // 下降に関連する特徴
                     if (isShortCross) features.push({ key: 'DC', label: 'MACDデッドクロス', color: 'text-gray-700', dot: 'bg-red-400' });
                     if (macd_today < 0) features.push({ key: 'MACD-0-', label: 'MACD 0ライン下', color: 'text-gray-700', dot: 'bg-red-400' });
                     if (typeof rsi_today === 'number' && rsi_today < 50 && rsi_today >= 30) features.push({ key: 'RSI-MID', label: `RSI下降 (${rsi_today.toFixed(0)})`, color: 'text-gray-700', dot: 'bg-red-400' });
                     if (isVolumeHigh_1_5 && todayClose < chronoPrices[chronoPrices.length - 2]) features.push({ key: 'Vol-Down', label: '出来高増 & 陰線', color: 'text-gray-700', dot: 'bg-red-400' });
 
-                    // 中立/注意すべき特徴
                     if (typeof rsi_today === 'number') {
                         if (rsi_today > 70) features.push({ key: 'RSI-H', label: `RSI過熱 (${rsi_today.toFixed(0)})`, color: 'text-gray-700', dot: 'bg-yellow-400' });
                         if (rsi_today < 30) features.push({ key: 'RSI-L', label: `RSI売られすぎ (${rsi_today.toFixed(0)})`, color: 'text-gray-700', dot: 'bg-yellow-400' });
@@ -880,7 +968,7 @@
                     const periodDays = parseInt(periodSelectElement ? periodSelectElement.value : '30'); 
                     const signalIndex = chronoPrices.findLastIndex(v => typeof v === 'number');
                     const probability = calculateProbabilities(chronoPrices, signalIndex, periodDays);
-
+                    
                     
                     // --- ロジック分岐 ---
 
@@ -978,7 +1066,7 @@
                             else if (isVolumeHigh_1_5) strength += 1;
                             
                         } else if (isBreakoutSignal) {
-                            signalType = 'R1ブレイク'; // ブレイクアウトシグナルは買い側と見なす
+                            signalType = 'R1ブレイク'; 
                             strength = 1; 
                             if (adx_today > 25) strength += 1; 
                             if (sma25 > sma25_5days_ago) strength += 1; 
@@ -1073,16 +1161,14 @@
                             <p class="text-xs font-normal text-gray-500 mt-2 leading-5" data-status="day-high-low">DH: -- / DL: --</p>
                             <p class="text-xs font-normal text-gray-500 mt-1 leading-5" data-status="volume">Vol: --</p>
                             
-                            <!-- [修正] ピボットポイントをこのカラムに移動 -->
                             <p class="text-xs font-normal text-gray-500 mt-3 leading-5" data-status="pivot-r1">抵抗1: --</p>
                             <p class="text-xs font-normal text-gray-500 mt-1 leading-5" data-status="pivot-s1">支持1: --</p>
 
-                            <!-- [修正] 勝率表示エリア (コンパクト化) -->
+                            <!-- 勝率表示エリア -->
                             <div class="mt-4 p-2 rounded-lg border border-gray-200 shadow-inner">
                                 <div data-status="probability-title-container" class="mb-1">
-                                    <p class="text-sm font-bold text-gray-700 w-full" data-status="probability-title">利益/損失 確率</p>
+                                    <p class="text-sm font-bold text-gray-700 w-full" data-status="probability-title">利益/損失 確率 (過去分析)</p>
                                 </div>
-                                <!-- 期間選択をタイトル下に配置 -->
                                 <div class="flex items-center justify-between mb-2">
                                     <p class="text-xs font-semibold text-gray-500" data-status="probability-detail-label">1ヶ月後 (194例)</p>
                                     <select data-id="${stock.id}" data-action="period-select" class="text-xs font-medium text-gray-700 px-1 py-0.5 border border-gray-300 rounded-md bg-white hover:border-indigo-500">
@@ -1091,7 +1177,6 @@
                                         <option value="250">1年後</option>
                                     </select>
                                 </div>
-                                <!-- [修正] min-h-[50px]を追加してCLSを防ぐ -->
                                 <div class="flex justify-between items-center space-x-2 border-t border-gray-100 pt-1 min-h-[50px]"> 
                                     <div class="flex-1 text-center">
                                         <p class="text-xs text-gray-500">利益率</p>
@@ -1103,20 +1188,27 @@
                                     </div>
                                 </div>
                             </div>
+                            
+                            <!-- ニュース検索ボタン -->
+                            <div class="mt-4">
+                                <button data-action="fetch-news" data-id="${stock.id}" data-symbol="${stock.symbol}" data-full-symbol="${stock.fullSymbol}" class="bg-blue-500 hover:bg-blue-600 text-white text-xs font-bold py-1 px-3 rounded-md shadow-sm transition duration-150 ease-in-out w-full">
+                                    <span data-status="news-button-text">最新ニュースを検索・要約 (Gemini)</span>
+                                </button>
+                            </div>
+                            
                         </div>
                         
                         <!-- 右カラム: 分析情報と特徴リスト -->
                         <div>
                             <!-- トレンド強弱の数値 (+/-%) -->
                             <div class="flex items-center mb-1 h-6">
-                                <!-- [修正] text-sm から text-xl, font-bold から font-extrabold に変更 -->
                                 <p class="text-xl font-extrabold" data-status="trend-value">--</p>
                             </div>
-                            <!-- [修正] トレンドテキストとアイコンを結合し、間に適切なスペースを空ける -->
+                            <!-- トレンドテキストとアイコンを結合 -->
                             <div class="flex items-center mb-1 mt-2"> 
                                 <p class="text-xs font-semibold leading-7" data-status="trend-text">トレンド</p>
                             </div>
-                            <!-- [新規] 特徴リスト -->
+                            <!-- 特徴リスト -->
                             <div class="mt-2">
                                 <p class="text-xs font-semibold text-gray-700 mb-1">主要特徴:</p>
                                 <ul data-status="features-list" class="space-y-1">
@@ -1163,18 +1255,16 @@
                 const pivotR1Text = card.querySelector('[data-status="pivot-r1"]');
                 const pivotS1Text = card.querySelector('[data-status="pivot-s1"]');
                 
-                // トレンド表示要素
                 const trendText = card.querySelector('[data-status="trend-text"]'); 
-                const trendValueText = card.querySelector('[data-status="trend-value"]'); // 強弱数値
-                
-                // 特徴リスト要素
+                const trendValueText = card.querySelector('[data-status="trend-value"]'); 
                 const featuresList = card.querySelector('[data-status="features-list"]');
-                
-                // 勝率表示要素
                 const winRateText = card.querySelector('[data-status="win-rate"]');
                 const lossRateText = card.querySelector('[data-status="loss-rate"]');
                 const probabilityTitle = card.querySelector('[data-status="probability-title"]');
-                const probabilityDetailLabel = card.querySelector('[data-status="probability-detail-label"]'); // 詳細ラベル
+                const probabilityDetailLabel = card.querySelector('[data-status="probability-detail-label"]'); 
+                
+                const newsButton = card.querySelector('[data-action="fetch-news"]'); 
+                const newsButtonText = card.querySelector('[data-status="news-button-text"]');
 
                 signalText.className = 'text-md font-semibold mt-1 leading-7';
                 loader.classList.add('hidden');
@@ -1183,14 +1273,17 @@
                 
                 if (price !== '--.--') priceText.textContent = price;
 
+                // ニュースボタンをリセット
+                if (newsButton) {
+                    newsButton.disabled = false;
+                    newsButtonText.textContent = '最新ニュースを検索・要約 (Gemini)';
+                }
+
                 // --- トレンド表示の更新 ---
                 if (trendSummary && trendText && trendValueText) {
-                    // トレンドテキストの直後にアイコンを配置 (下降中▼)
                     trendText.textContent = `${trendSummary.text}${trendSummary.icon}`; 
-                    
                     trendText.className = `text-xs font-semibold leading-7 ${trendSummary.color}`;
                     
-                    // 乖離率の表示
                     if (trendSummary.value !== 0) {
                         const sign = trendSummary.value > 0 ? '+' : '';
                         const colorClass = trendSummary.value > 0 ? 'text-green-600' : (trendSummary.value < 0 ? 'text-red-600' : 'text-gray-500');
@@ -1215,16 +1308,13 @@
                 }
 
                 // --- 確率の更新 ---
-                // [修正] 全ての確率関連要素が存在するかチェック
                 if (probability && probabilityTitle && probabilityDetailLabel && winRateText && lossRateText) {
-                    // タイトルを短縮
-                    probabilityTitle.textContent = `利益/損失 確率`;
+                    probabilityTitle.textContent = `利益/損失 確率 (過去分析)`;
 
                     if (probability.total > 0) {
                         const winPercentage = probability.winRate.toFixed(1);
                         const lossPercentage = probability.lossRate.toFixed(1);
 
-                        // 利益率/損失率を正確に表示
                         winRateText.textContent = `${winPercentage}%`;
                         lossRateText.textContent = `${lossPercentage}%`;
                         
@@ -1232,28 +1322,23 @@
                         if (probability.period === 30) periodLabel = '1ヶ月後';
                         if (probability.period === 250) periodLabel = '1年後'; 
                         
-                        // 詳細ラベルに期間と例数を表示
                         probabilityDetailLabel.textContent = `${periodLabel} (${probability.total}例)`;
 
-                        // 利益/損失の確率が0%の場合は、ハイフン表示
                         if (parseFloat(winPercentage) === 0) winRateText.textContent = '-';
                         if (parseFloat(lossPercentage) === 0) lossRateText.textContent = '-';
 
                     } else {
-                        // データ不足の場合
                         probabilityDetailLabel.textContent = `データ不足`;
                         winRateText.textContent = '-';
                         lossRateText.textContent = '-';
                     }
 
                 } else if (probabilityTitle && probabilityDetailLabel && winRateText && lossRateText) {
-                    // 確率データがないが、UI要素は存在する場合 (初期状態など)
-                    probabilityTitle.textContent = `利益/損失 確率`;
+                    probabilityTitle.textContent = `利益/損失 確率 (過去分析)`;
                     probabilityDetailLabel.textContent = `データなし`;
                     winRateText.textContent = '-';
                     lossRateText.textContent = '-';
                 }
-
 
                 // --- 価格・出来高・ピボットの更新 ---
                 if (highLowText) {
@@ -1266,7 +1351,6 @@
                 }
                 if (pivotR1Text && pivotS1Text) {
                     if (pivots && typeof pivots.r1 === 'number' && typeof pivots.s1 === 'number') {
-                        // [修正] R1/S1を漢字に
                         pivotR1Text.textContent = `抵抗1: ${pivots.r1.toFixed(2)}`;
                         pivotS1Text.textContent = `支持1: ${pivots.s1.toFixed(2)}`;
                         pivotR1Text.classList.remove('text-gray-500');
@@ -1274,7 +1358,6 @@
                         pivotR1Text.classList.add('text-red-600'); 
                         pivotS1Text.classList.add('text-green-600'); 
                     } else {
-                         // [修正] R1/S1を漢字に
                         pivotR1Text.textContent = '抵抗1: --';
                         pivotS1Text.textContent = '支持1: --';
                         pivotR1Text.classList.add('text-gray-500');
@@ -1438,8 +1521,23 @@
                 symbolInput.value = '';
             });
 
-            watchlistContainer.addEventListener('click', (e) => {
+            // モーダルを閉じる
+            closeModalButton.addEventListener('click', () => {
+                newsModal.classList.add('hidden');
+                newsModal.classList.remove('flex');
+            });
+            // モーダル外のクリックで閉じる (オプション)
+            newsModal.addEventListener('click', (e) => {
+                if (e.target === newsModal) {
+                    newsModal.classList.add('hidden');
+                    newsModal.classList.remove('flex');
+                }
+            });
+
+            watchlistContainer.addEventListener('click', async (e) => {
                 const removeButton = e.target.closest('[data-action="remove"]');
+                const newsButton = e.target.closest('[data-action="fetch-news"]');
+
                 if (removeButton) {
                     const stockId = removeButton.dataset.id;
                     
@@ -1459,12 +1557,53 @@
                     if (watchlist.length === 0) {
                         watchlistContainer.innerHTML = '<p class="text-gray-500 col-span-full no-stocks-message">監視中の銘柄はありません。</p>';
                     }
+                } else if (newsButton) {
+                    const stockSymbol = newsButton.dataset.symbol;
+                    const fullSymbol = newsButton.dataset.fullSymbol;
+                    
+                    // モーダルを表示し、ローディング状態にする
+                    modalTitle.textContent = `${stockSymbol} (${fullSymbol}) のニュース検索結果`;
+                    modalNewsContent.innerHTML = `<div class="flex items-center justify-center h-24 text-blue-500">
+                        <svg class="animate-spin -ml-1 mr-3 h-5 w-5 text-current" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                        ニュースを検索中...
+                    </div>`;
+                    modalSourceLinks.innerHTML = '';
+                    
+                    newsModal.classList.remove('hidden');
+                    newsModal.classList.add('flex');
+                    newsButton.disabled = true; // ボタンを無効化
+
+                    try {
+                        // ニュース検索を実行
+                        const { text, sources } = await fetchGeminiNews(stockSymbol);
+                        
+                        // 結果をモーダルに表示
+                        modalNewsContent.innerHTML = `<p class="text-base text-gray-800 leading-relaxed whitespace-pre-wrap">${text}</p>`;
+
+                        if (sources.length > 0) {
+                            const linkHtml = sources.map((s, index) => 
+                                `<div><span class="font-bold text-gray-800">${index + 1}.</span> <a href="${s.uri}" target="_blank" rel="noopener" class="text-indigo-500 hover:text-indigo-700 hover:underline inline-block">${s.title}</a></div>`
+                            ).join('');
+                            modalSourceLinks.innerHTML = linkHtml;
+                        } else {
+                            modalSourceLinks.innerHTML = '引用元情報なし';
+                        }
+                    } catch (error) {
+                        // エラーメッセージをモーダルに表示
+                        modalNewsContent.innerHTML = `<p class="text-red-500 text-sm">エラー: ニュース検索に失敗しました。<br>詳細: ${error.message}</p>`;
+                        modalSourceLinks.innerHTML = '';
+                        console.error("News Fetch Error:", error);
+                    } finally {
+                        // 検索完了後、ボタンを有効化
+                        newsButton.disabled = false;
+                    }
                 }
             });
             
             // 期間選択の変更イベントを親要素に委譲し、再計算をトリガー
             watchlistContainer.addEventListener('change', (e) => {
                 const periodSelect = e.target.closest('[data-action="period-select"]');
+                
                 if (periodSelect) {
                     const stockId = periodSelect.dataset.id;
                     const stockToUpdate = watchlist.find(stock => stock.id === stockId);
