@@ -163,7 +163,7 @@
             // 短期変動分析用の期間 (10分間のシミュレーション)
             const SHORT_TERM_PERIOD_MS = 10 * 60 * 1000; 
             // 短期変動の判定に必要な変動率
-            const SHORT_TERM_CHANGE_THRESHOLD = 0.005; // 0.5%以上の変動で急変動と判定
+            const SHORT_TERM_CHANGE_THRESHOLD = 0.005; 
 
             // --- DOM要素 ---
             const addStockForm = document.getElementById('add-stock-form');
@@ -187,48 +187,76 @@
             
             // --- APIヘルパー (Yahoo Finance) ---
             async function fetchApi(symbol, interval = '1d') {
-                const range = (interval === '1d') ? '2y' : '1d'; // 日足は2年、短期は1日
+                const range = (interval === '1d') ? '2y' : '1d'; 
                 const targetUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?range=${range}&interval=${interval}`;
                 const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`;
                 
-                try {
-                    const response = await fetch(proxyUrl);
-                    
-                    if (!response.ok) {
-                        if (response.status === 404) {
-                            throw new Error(`銘柄コード '${symbol}' が見つかりません (404)`);
-                        }
-                        throw new Error(`HTTP error! (Proxy or Target) status: ${response.status}`);
-                    }
-                    
-                    const data = await response.json(); 
-                    
-                    if (data.chart.error) {
-                        throw new Error(`Yahoo Finance APIエラー: ${data.chart.error.description || data.chart.error.code}`);
-                    }
-                    
-                    if (!data.chart.result || !data.chart.result[0] || !data.chart.result[0].indicators.quote[0]) {
-                         // 短期データ取得時はデータが空の場合があるため、ここでは致命的なエラーとしない
-                         if (interval === '1d') {
-                             throw new Error("Yahoo Financeから有効な日足データが返されませんでした。銘柄コードが間違っている可能性があります。");
-                         }
-                         return { chart: { result: [null] } };
-                    }
-                    
-                    return data;
+                let retries = 0;
+                const maxRetries = 3;
+                let delay = 1000; // 1秒から開始
 
-                } catch (error) {
-                    console.error(`Fetch error for ${proxyUrl}:`, error);
-                    if (error.message.includes('Failed to fetch')) {
-                        throw new Error("ネットワークエラー。Yahoo Finance API(プロキシ経由)へのアクセスに失敗しました。");
+                while (retries < maxRetries) {
+                    try {
+                        const response = await fetch(proxyUrl);
+                        
+                        if (!response.ok) {
+                            // 500または429(レート制限)の場合、リトライを試みる
+                            if ((response.status === 500 || response.status === 429) && retries < maxRetries - 1) {
+                                retries++;
+                                delay *= 2; 
+                                // console.log(`[Fetch Retry] Status ${response.status} for ${symbol}. Retrying in ${delay / 1000}s...`); // リトライログは出力しない
+                                await new Promise(resolve => setTimeout(resolve, delay));
+                                continue;
+                            }
+                            
+                            // 致命的なエラー、または最終リトライでのエラー
+                            if (response.status === 404) {
+                                throw new Error(`銘柄コード '${symbol}' が見つかりません (404)`);
+                            }
+                            throw new Error(`HTTP error! (Proxy or Target) status: ${response.status}`);
+                        }
+                        
+                        const data = await response.json(); 
+                        
+                        if (data.chart.error) {
+                            throw new Error(`Yahoo Finance APIエラー: ${data.chart.error.description || data.chart.error.code}`);
+                        }
+                        
+                        if (!data.chart.result || !data.chart.result[0] || !data.chart.result[0].indicators.quote[0]) {
+                             // 短期データ取得時はデータが空の場合があるため、ここでは致命的なエラーとしない
+                             if (interval === '1d') {
+                                 throw new Error("Yahoo Financeから有効な日足データが返されませんでした。銘柄コードが間違っている可能性があります。");
+                             }
+                             return { chart: { result: [null] } };
+                        }
+                        
+                        return data;
+
+                    } catch (error) {
+                        // ネットワークエラーまたはFetch自体のエラーの場合もリトライ
+                        if (retries < maxRetries - 1 && (error.message.includes('Failed to fetch') || error.message.includes('500'))) {
+                            retries++;
+                            delay *= 2;
+                            // console.error(`[Fetch Retry] Network error for ${symbol}. Retrying in ${delay / 1000}s...`); // リトライログは出力しない
+                            await new Promise(resolve => setTimeout(resolve, delay));
+                            continue;
+                        }
+                        
+                        // 致命的なエラー
+                        console.error(`Fetch error for ${proxyUrl}:`, error);
+                        if (error.message.includes('Failed to fetch')) {
+                            throw new Error("ネットワークエラー。Yahoo Finance API(プロキシ経由)へのアクセスに失敗しました。");
+                        }
+                        throw error;
                     }
-                    throw error;
                 }
+                
+                // 最大リトライ回数を超過した場合
+                throw new Error(`データ取得に失敗しました: 最大${maxRetries}回のリトライを超過しました。`);
             }
 
             /**
              * 短期変動シグナルと数値、支持抵抗ラインを計算
-             * @returns {object} 短期シグナルと変動率、支持抵抗ライン
              */
             function checkShortTermSignal(stockId, currentPrice) {
                 const defaultResult = { text: '安定', icon: '〰', color: 'text-gray-500', change: '0.00%', changeValue: 0, high: null, low: null };
@@ -874,7 +902,7 @@
                 const stockInWatchlist = watchlist.find(s => s.id === stock.id);
                 if (!stockInWatchlist) return; 
                 
-                const dummyTrend = { text: '--', icon: '↔', color: 'text-gray-500', value: 0 };
+                const dummyTrend = { text: '', icon: '↔', color: 'text-gray-500', value: 0 };
                 // 短期シグナルは常に最新のcurrentPriceでチェックする
                 const shortTermSignal = checkShortTermSignal(stock.id, currentPrice);
 
@@ -885,7 +913,7 @@
                      updateCardStatus(stock.id, 'loading', '', currentPrice, dummyTrend, shortTermSignal, 0, 0, 0, null, null, null, null, null, [], null, {});
                 }
 
-                let todayClose = currentPrice; // 更新がない場合は前回の価格を使用
+                let todayClose = currentPrice; 
                 let trendSummary = dummyTrend;
                 let dayHigh = null;
                 let dayLow = null;
@@ -893,7 +921,7 @@
                 let momentum = { short: 'neutral', mid: 'neutral' };
                 let pivots = null;
                 let features = [];
-                let signalDetails = {}; // 新規追加: シグナル根拠の詳細
+                let signalDetails = {}; 
                 let probability = null;
                 let macdResult = null;
                 let atr_today = null;
@@ -1053,7 +1081,7 @@
                     const hist_today = macdResult.today.hist;
                     const macd_yesterday = macdResult.yesterday.macd;
                     const signal_yesterday = macdResult.yesterday.signal;
-                    const macdCrossDistance = macd_today - signal_today; // クロス距離
+                    const macdCrossDistance = macd_today - signal_today; 
 
                     const isLongCross = (macd_yesterday < signal_yesterday) && (macd_today > signal_today);
                     const isHistPositive = hist_today > 0;
@@ -1463,8 +1491,10 @@
                             <p class="text-4xl font-extrabold leading-9" data-status="price">--.--</p>
                             <!-- 日足トレンドを大きく、価格の真下に配置 -->
                             <div class="flex items-end space-x-1 mt-1">
+                                <!-- 乖離率 (%) -->
                                 <p class="text-lg font-extrabold" data-status="trend-value">--</p>
-                                <p class="text-xs font-semibold leading-5" data-status="trend-text">日足トレンド</p>
+                                <!-- 矢印のみ (テキスト削除) -->
+                                <p class="text-xs font-semibold leading-5" data-status="trend-text"></p>
                             </div>
                         </div>
 
@@ -1590,7 +1620,7 @@
                 
                 const trendText = card.querySelector('[data-status="trend-text"]'); 
                 const trendValueText = card.querySelector('[data-status="trend-value"]'); 
-                // const featuresList = card.querySelector('[data-status="features-list"]'); // 削除された要素
+                // const featuresList = card.querySelector('[data-status="features-list"]'); 
                 const signalDetailsList = card.querySelector('[data-status="signal-details"]'); 
                 const winRateText = card.querySelector('[data-status="win-rate"]');
                 const lossRateText = card.querySelector('[data-status="loss-rate"]');
@@ -1636,17 +1666,19 @@
 
                 // --- 日足トレンド表示の更新 ---
                 if (trendSummary && trendText && trendValueText) {
-                    trendText.textContent = `${trendSummary.icon}トレンド`; // テキストを「トレンド」に変更し、矢印を前に配置
-                    trendText.className = `text-xs font-semibold leading-5 ${trendSummary.color}`;
+                    // trendText (日足トレンドの矢印): 矢印のみを大きく表示
+                    trendText.textContent = trendSummary.icon; 
+                    trendText.className = `text-2xl font-extrabold leading-5 ${trendSummary.color}`; // 矢印を大きく強調
                     
+                    // trendValueText (乖離率): %を表示し、フォントサイズを調整
                     if (trendSummary.value !== 0) {
                         const sign = trendSummary.value > 0 ? '+' : '';
                         const colorClass = trendSummary.value > 0 ? 'text-green-600' : (trendSummary.value < 0 ? 'text-red-600' : 'text-gray-500');
                         trendValueText.textContent = `${sign}${trendSummary.value.toFixed(2)}%`;
-                        trendValueText.className = `text-lg font-extrabold ${colorClass}`; 
+                        trendValueText.className = `text-sm font-semibold ${colorClass}`; // %は小さく表示
                     } else {
                         trendValueText.textContent = `0.00%`;
-                        trendValueText.className = `text-lg font-extrabold text-gray-500`; 
+                        trendValueText.className = `text-sm font-semibold text-gray-500`; // %は小さく表示
                     }
                 }
                 
@@ -1837,7 +1869,7 @@
                         ...stock,
                         position: stock.position || null,
                         timerId: null,
-                        statusType: 'idle' // シグナルサマリー用に初期化
+                        statusType: 'idle' 
                     }));
                 }
             }
