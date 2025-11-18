@@ -897,20 +897,21 @@
             async function checkStockSignal(stock) {
                 const card = document.getElementById(`card-${stock.id}`);
                 const priceText = card ? card.querySelector('[data-status="price"]') : null;
-                const currentPrice = (priceText && priceText.textContent !== '--.--') ? parseFloat(priceText.textContent) : NaN;
+                // DOMから取得した既存の価格を初期値として使用
+                let currentPrice = (priceText && priceText.textContent !== '--.--') ? parseFloat(priceText.textContent) : NaN; 
                 
                 const stockInWatchlist = watchlist.find(s => s.id === stock.id);
                 if (!stockInWatchlist) return; 
                 
                 const dummyTrend = { text: '', icon: '↔', color: 'text-gray-500', value: 0 };
-                // 短期シグナルは常に最新のcurrentPriceでチェックする
-                const shortTermSignal = checkShortTermSignal(stock.id, currentPrice);
+                // ローディング中に表示する短期シグナルの初期状態を定義
+                const dummyShortTerm = { text: '取得中', icon: '...', color: 'text-gray-500', change: '--%', changeValue: 0, high: null, low: null };
 
-                // ローディング表示を更新
+                // ローディング表示を更新 (短期シグナルはダミーを渡す)
                 if (!stockInWatchlist.position) {
-                     updateCardStatus(stock.id, 'loading', '', currentPrice, dummyTrend, shortTermSignal, 0, 0, 0, null, null, null, null, null, [], null, {}); 
+                     updateCardStatus(stock.id, 'loading', '', currentPrice, dummyTrend, dummyShortTerm, 0, 0, 0, null, null, null, null, null, [], null, {}); 
                 } else {
-                     updateCardStatus(stock.id, 'loading', '', currentPrice, dummyTrend, shortTermSignal, 0, 0, 0, null, null, null, null, null, [], null, {});
+                     updateCardStatus(stock.id, 'loading', '', currentPrice, dummyTrend, dummyShortTerm, 0, 0, 0, null, null, null, null, null, [], null, {});
                 }
 
                 let todayClose = currentPrice; 
@@ -1005,6 +1006,7 @@
                     }
                     
                     todayClose = lastValidData.close;
+                    currentPrice = todayClose; // ★ 修正: APIで取得した最新価格に更新
                     dayHigh = lastValidData.high; 
                     dayLow = lastValidData.low;   
                     todayVolume = lastValidData.volume;
@@ -1083,7 +1085,7 @@
                     const signal_yesterday = macdResult.yesterday.signal;
                     const macdCrossDistance = macd_today - signal_today; 
 
-                    const isLongCross = (macd_yesterday < signal_yesterday) && (macd_today > signal_today);
+                    const isLongCross = (macd_yesterday < signal_yesterday) && (macd_today > signal_yesterday);
                     const isHistPositive = hist_today > 0;
                     const isShortCross = (macd_yesterday > signal_yesterday) && (macd_today < signal_yesterday); 
                     const isHistNegative = hist_today < 0;
@@ -1163,11 +1165,15 @@
                 } catch (error) {
                     console.error(`Error checking daily data for ${stock.fullSymbol}:`, error);
                     dailyDataFetchError = true;
-                    // エラー発生時は、日足分析をスキップし、短期変動とポジションチェックのみを試みる
+                    // エラー発生時は、短期変動とポジションチェックのみを試みる
                     todayClose = currentPrice;
                     trendSummary = dummyTrend;
                 }
                 
+                // --- 短期変動シグナルの再計算 (API価格取得またはエラー後、currentPriceが確定した後) ---
+                // currentPrice (最新のAPI価格、またはフォールバック価格) を使って短期シグナルをチェック
+                const shortTermSignal = checkShortTermSignal(stock.id, currentPrice); 
+
                 // --- 2. ロジック分岐 ---
                 
                 let strength = 0;
@@ -1305,7 +1311,7 @@
                      signalType = '日足データエラー';
                 }
                 
-                updateCardStatus(stock.id, statusType, signalType, todayClose.toFixed(2), trendSummary, shortTermSignal, strength, 0, 0, dayHigh, dayLow, todayVolume, momentum, pivots, features, probability, signalDetails);
+                updateCardStatus(stock.id, statusType, signalType, currentPrice.toFixed(2), trendSummary, shortTermSignal, strength, 0, 0, dayHigh, dayLow, todayVolume, momentum, pivots, features, probability, signalDetails);
 
                 // --- シグナル一覧の更新 ---
                 updateSignalSummary(stock.id, stock.symbol, statusType, shortTermSignal);
@@ -1595,7 +1601,9 @@
                     const sl = stock.position.stopLoss.toFixed(2);
                     const pt = stock.position.profitTarget.toFixed(2);
                     const dummyTrend = { text: '', icon: '↔', color: 'text-gray-500', value: 0 };
+                    // 短期シグナル初期化用
                     const dummyShortTerm = { text: '取得中', icon: '...', color: 'text-gray-500', change: '--%', changeValue: 0, high: null, low: null };
+                    
                     if (stock.position.type === 'LONG') {
                          updateCardStatus(stock.id, 'holding-long', `損切: ${sl} / 利確: ${pt}`, stock.position.entryPrice.toFixed(2), dummyTrend, dummyShortTerm, 0, 0, 0, null, null, null, null, null, [], null, {});
                     } else {
