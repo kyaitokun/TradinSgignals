@@ -1013,7 +1013,7 @@
                     const isSma5Up = sma5 > sma5_yesterday;
                     const isSma25Up = sma25 > sma25_yesterday;
                     
-                    let trendText = '横ばい';
+                    let trendText = ''; // テキストを削除
                     let trendIcon = '↔';
                     let trendColor = 'text-gray-500';
                     let trendValue = 0; 
@@ -1023,29 +1023,23 @@
                         
                         if (sma5 > sma25) { 
                             if (isSma5Up && isSma25Up) {
-                                trendText = '強力な上昇トレンド';
                                 trendIcon = '▲▲';
                                 trendColor = 'text-green-600';
                             } else if (isSma5Up) {
-                                trendText = '上昇トレンド';
                                 trendIcon = '↑';
                                 trendColor = 'text-green-500';
                             } else {
-                                trendText = '上昇中';
                                 trendIcon = '▲';
                                 trendColor = 'text-green-500/70'; 
                             }
                         } else if (sma5 < sma25) { 
                             if (!isSma5Up && !isSma25Up) {
-                                trendText = '強力な下降トレンド';
                                 trendIcon = '▼▼';
                                 trendColor = 'text-red-600';
                             } else if (!isSma5Up) {
-                                trendText = '下降トレンド';
                                 trendIcon = '↓';
                                 trendColor = 'text-red-500';
                             } else {
-                                trendText = '下降中';
                                 trendIcon = '▼';
                                 trendColor = 'text-red-500/70'; 
                             }
@@ -1470,7 +1464,7 @@
                             <!-- 日足トレンドを大きく、価格の真下に配置 -->
                             <div class="flex items-end space-x-1 mt-1">
                                 <p class="text-lg font-extrabold" data-status="trend-value">--</p>
-                                <p class="text-xs font-semibold leading-5" data-status="trend-text">トレンド</p>
+                                <p class="text-xs font-semibold leading-5" data-status="trend-text">日足トレンド</p>
                             </div>
                         </div>
 
@@ -1570,7 +1564,7 @@
                 if (stock.position) {
                     const sl = stock.position.stopLoss.toFixed(2);
                     const pt = stock.position.profitTarget.toFixed(2);
-                    const dummyTrend = { text: '--', icon: '↔', color: 'text-gray-500', value: 0 };
+                    const dummyTrend = { text: '', icon: '↔', color: 'text-gray-500', value: 0 };
                     const dummyShortTerm = { text: '取得中', icon: '...', color: 'text-gray-500', change: '--%', changeValue: 0, high: null, low: null };
                     if (stock.position.type === 'LONG') {
                          updateCardStatus(stock.id, 'holding-long', `損切: ${sl} / 利確: ${pt}`, stock.position.entryPrice.toFixed(2), dummyTrend, dummyShortTerm, 0, 0, 0, null, null, null, null, null, [], null, {});
@@ -1642,7 +1636,7 @@
 
                 // --- 日足トレンド表示の更新 ---
                 if (trendSummary && trendText && trendValueText) {
-                    trendText.textContent = `${trendSummary.text}${trendSummary.icon}`; 
+                    trendText.textContent = `${trendSummary.icon}トレンド`; // テキストを「トレンド」に変更し、矢印を前に配置
                     trendText.className = `text-xs font-semibold leading-5 ${trendSummary.color}`;
                     
                     if (trendSummary.value !== 0) {
